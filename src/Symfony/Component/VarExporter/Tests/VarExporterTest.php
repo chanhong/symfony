@@ -15,6 +15,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\VarDumper\Test\VarDumperTestTrait;
 use Symfony\Component\VarExporter\Exception\ClassNotFoundException;
+use Symfony\Component\VarExporter\Exception\LogicException;
 use Symfony\Component\VarExporter\Exception\NotInstantiableTypeException;
 use Symfony\Component\VarExporter\Internal\Registry;
 use Symfony\Component\VarExporter\Tests\Fixtures\BackedProperty;
@@ -26,6 +27,7 @@ use Symfony\Component\VarExporter\Tests\Fixtures\MySerializable;
 use Symfony\Component\VarExporter\Tests\Fixtures\MyWakeup;
 use Symfony\Component\VarExporter\Tests\Fixtures\Php74Serializable;
 use Symfony\Component\VarExporter\Tests\Fixtures\PrivateFCC;
+use Symfony\Component\VarExporter\Tests\Fixtures\SleepUninitialized;
 use Symfony\Component\VarExporter\VarExporter;
 
 $errorHandler = set_error_handler(static function (int $errno, string $errstr) use (&$errorHandler) {
@@ -68,6 +70,14 @@ class VarExporterTest extends TestCase
         }
     }
 
+    public function testLoadingLegacyExportedCodeThrows()
+    {
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage('Code exported by symfony/var-exporter < 8.1 cannot be loaded anymore and must be regenerated.');
+
+        include __DIR__.'/Fixtures/legacy-exported-code.php';
+    }
+
     #[DataProvider('provideFailingSerialization')]
     public function testFailingSerialization($value)
     {
@@ -83,7 +93,6 @@ class VarExporterTest extends TestCase
 
     public static function provideFailingSerialization()
     {
-        yield [hash_init('md5')];
         yield [new \ReflectionClass(\stdClass::class)];
         yield [(new \ReflectionFunction(static function (): int {}))->getReturnType()];
         yield [new \ReflectionGenerator((static function () { yield 123; })())];
@@ -102,6 +111,35 @@ class VarExporterTest extends TestCase
         $a[0] = &$a;
 
         yield [$a];
+    }
+
+    public function testHashContext()
+    {
+        $value = hash_init('md5');
+        hash_update($value, 'foo');
+
+        $copy = eval('return '.VarExporter::export($value).';');
+
+        hash_update($value, 'bar');
+        hash_update($copy, 'bar');
+
+        $this->assertSame(hash_final($value), hash_final($copy));
+    }
+
+    public function testBcMathNumber()
+    {
+        if (!class_exists(\BcMath\Number::class)) {
+            $this->markTestSkipped('The "bcmath" extension with the BcMath\Number class is required.');
+        }
+
+        $value = new \BcMath\Number('9999.99');
+
+        $marshalledValue = VarExporter::export($value);
+        $copy = eval('return '.$marshalledValue.';');
+
+        $this->assertInstanceOf(\BcMath\Number::class, $copy);
+        $this->assertSame((string) $value, (string) $copy);
+        $this->assertTrue($value == $copy);
     }
 
     #[DataProvider('provideExport')]
@@ -248,7 +286,7 @@ class VarExporterTest extends TestCase
         yield ['readonly', new FooReadonly('k', 'v')];
 
         yield ['named-closure-method', (new TestClass())->testMethod(...)];
-        yield ['named-closure-static', TestClass::testStaticMethod(...), true];
+        yield ['named-closure-static', TestClass::testStaticMethod(...)];
 
         yield ['backed-property', new BackedProperty('name')];
 
@@ -256,12 +294,39 @@ class VarExporterTest extends TestCase
             return;
         }
 
-        yield ['private-fcc', (new \ReflectionClass(PrivateFCC::class))->getAttributes(PrivateFCC::class)[0]->getArguments()[0], true];
+        yield ['private-fcc', (new \ReflectionClass(PrivateFCC::class))->getAttributes(PrivateFCC::class)[0]->getArguments()[0]];
     }
 
     public function testUnicodeDirectionality()
     {
         $this->assertSame('"\0\r\u{202A}\u{202B}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{202C}\u{2069}\n"', VarExporter::export("\0\r\u{202A}\u{202B}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{202C}\u{2069}\n"));
+    }
+
+    public function testSleepListingUninitializedTypedPropertyEmitsNoNotice()
+    {
+        $errors = [];
+        $previous = set_error_handler(static function (int $errno, string $errstr) use (&$errors) {
+            $errors[] = $errstr;
+
+            return true;
+        });
+
+        try {
+            VarExporter::export(new SleepUninitialized('hello'));
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assertSame([], $errors);
+    }
+
+    public function testFlatArrayIndent()
+    {
+        $o = new \stdClass();
+        $o->msg = "line1\nline2";
+        $exported = VarExporter::export($o);
+
+        $this->assertStringContainsString("['line1'.\"\\n\"\n                .'line2']", $exported);
     }
 }
 

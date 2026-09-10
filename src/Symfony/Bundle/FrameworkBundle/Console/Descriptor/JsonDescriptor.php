@@ -174,7 +174,7 @@ class JsonDescriptor extends Descriptor
             throw new RuntimeException('The deprecation file does not exist, please try warming the cache first.');
         }
 
-        $logs = unserialize(file_get_contents($containerDeprecationFilePath));
+        $logs = unserialize(file_get_contents($containerDeprecationFilePath), ['allowed_classes' => false]);
 
         $formattedLogs = [];
         $remainingCount = 0;
@@ -289,7 +289,7 @@ class JsonDescriptor extends Descriptor
         }
 
         $calls = $definition->getMethodCalls();
-        if (\count($calls) > 0) {
+        if ($calls) {
             $data['calls'] = [];
             foreach ($calls as $callData) {
                 $data['calls'][] = $callData[0];

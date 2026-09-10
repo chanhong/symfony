@@ -4,6 +4,7 @@ CHANGELOG
 8.1
 ---
 
+ * Add `DateTimeZone` value object support with `DateTimeZoneValueObjectTransformer`
  * Add `DateInterval` value object support with `DateIntervalValueObjectTransformer`
  * Add timezone support to `DateTimeValueObjectTransformer`
  * Add value object support
@@ -11,6 +12,7 @@ CHANGELOG
  * Deprecate `DateTimeToStringValueTransformer` and `StringToDateTimeValueTransformer`, use `DateTimeValueObjectTransformer` instead
  * Deprecate `ValueTransformerInterface`, use `PropertyValueTransformerInterface` instead
  * Add `$defaultOptions` to `JsonStreamReader` and `JsonStreamWriter`
+ * Reject JSON inputs reaching `Lexer::MAX_DEPTH` consistently with `json_decode()`
 
 8.0
 ---

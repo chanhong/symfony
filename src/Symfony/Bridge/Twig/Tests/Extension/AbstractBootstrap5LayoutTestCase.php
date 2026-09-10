@@ -16,6 +16,7 @@ use Symfony\Component\Form\Extension\Core\Type\CheckboxType;
 use Symfony\Component\Form\Extension\Core\Type\ChoiceType;
 use Symfony\Component\Form\Extension\Core\Type\ColorType;
 use Symfony\Component\Form\Extension\Core\Type\CountryType;
+use Symfony\Component\Form\Extension\Core\Type\DateIntervalType;
 use Symfony\Component\Form\Extension\Core\Type\DateTimeType;
 use Symfony\Component\Form\Extension\Core\Type\DateType;
 use Symfony\Component\Form\Extension\Core\Type\FileType;
@@ -783,13 +784,14 @@ abstract class AbstractBootstrap5LayoutTestCase extends AbstractBootstrap4Layout
             'placeholder' => 'Test&Me',
         ]);
 
+        $placeholderHidden = $this->isRequiredPlaceholderHiddenByDefault() ? '[@hidden="hidden"]' : '[not(@hidden)]';
         $this->assertWidgetMatchesXpath($form->createView(), ['attr' => ['class' => 'my&class']],
             '/select
     [@name="name"]
     [@class="my&class form-select"]
     [@required="required"]
     [
-        ./option[@value=""][not(@selected)][not(@disabled)][.="[trans]Test&Me[/trans]"]
+        ./option[@value=""][not(@selected)][not(@disabled)]'.$placeholderHidden.'[.="[trans]Test&Me[/trans]"]
         /following-sibling::option[@value="&a"][@selected="selected"][.="[trans]Choice&A[/trans]"]
         /following-sibling::option[@value="&b"][not(@selected)][.="[trans]Choice&B[/trans]"]
     ]
@@ -807,13 +809,15 @@ abstract class AbstractBootstrap5LayoutTestCase extends AbstractBootstrap4Layout
             'expanded' => false,
         ]);
 
+        // The hidden attribute is only defaulted for the "placeholder" option:
+        // placeholders injected via view variables render without it.
         $this->assertWidgetMatchesXpath($form->createView(), ['placeholder' => '', 'attr' => ['class' => 'my&class']],
             '/select
     [@name="name"]
     [@class="my&class form-select"]
     [@required="required"]
     [
-        ./option[@value=""][not(@selected)][not(@disabled)][.=""]
+        ./option[@value=""][not(@selected)][not(@disabled)][not(@hidden)][.=""]
         /following-sibling::option[@value="&a"][@selected="selected"][.="[trans]Choice&A[/trans]"]
         /following-sibling::option[@value="&b"][not(@selected)][.="[trans]Choice&B[/trans]"]
     ]
@@ -1889,6 +1893,66 @@ abstract class AbstractBootstrap5LayoutTestCase extends AbstractBootstrap4Layout
         /following-sibling::label
             [@for="name"]
     ]
+'
+        );
+    }
+
+    public function testDateTimeWithError()
+    {
+        $form = $this->factory->createNamed('name', DateTimeType::class, null, [
+            'input' => 'string',
+            'with_seconds' => false,
+            'widget' => 'choice',
+        ]);
+        $form->submit(['date' => ['year' => '2018', 'month' => '2', 'day' => '3'], 'time' => ['hour' => '4', 'minute' => '5']]);
+        $form->addError(new FormError('[trans]Error![/trans]'));
+
+        $this->assertWidgetMatchesXpath($form->createView(), ['attr' => ['class' => 'my&class']],
+            '/div
+    [@class="my&class is-invalid"]
+    [count(.//select)=5]
+'
+        );
+    }
+
+    public function testDateWithError()
+    {
+        $form = $this->factory->createNamed('name', DateType::class, null, ['widget' => 'choice']);
+        $form->submit(['year' => '2018', 'month' => '2', 'day' => '3']);
+        $form->addError(new FormError('[trans]Error![/trans]'));
+
+        $this->assertWidgetMatchesXpath($form->createView(), ['attr' => ['class' => 'my&class']],
+            '/div
+    [@class="my&class is-invalid"]
+    [count(.//select)=3]
+'
+        );
+    }
+
+    public function testTimeWithError()
+    {
+        $form = $this->factory->createNamed('name', TimeType::class, null, ['widget' => 'choice']);
+        $form->submit(['hour' => '4', 'minute' => '5']);
+        $form->addError(new FormError('[trans]Error![/trans]'));
+
+        $this->assertWidgetMatchesXpath($form->createView(), ['attr' => ['class' => 'my&class']],
+            '/div
+    [@class="my&class is-invalid"]
+    [count(.//select)=2]
+'
+        );
+    }
+
+    public function testDateIntervalWithError()
+    {
+        $form = $this->factory->createNamed('name', DateIntervalType::class);
+        $form->submit(['years' => '1', 'months' => '2', 'days' => '3']);
+        $form->addError(new FormError('[trans]Error![/trans]'));
+
+        $this->assertWidgetMatchesXpath($form->createView(), ['attr' => ['class' => 'my&class']],
+            '/div
+    [@class="my&class is-invalid"]
+    [count(.//select)=3]
 '
         );
     }

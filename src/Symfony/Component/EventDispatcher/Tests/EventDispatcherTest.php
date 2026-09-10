@@ -70,16 +70,16 @@ class EventDispatcherTest extends TestCase
         $this->dispatcher->addListener('pre.foo', [$listener1, 'preFoo'], -10);
         $this->dispatcher->addListener('pre.foo', [$listener2, 'preFoo'], 10);
         $this->dispatcher->addListener('pre.foo', [$listener3, 'preFoo']);
-        $this->dispatcher->addListener('pre.foo', $listener4->preFoo(...), 20);
+        $this->dispatcher->addListener('pre.foo', $listener4Listener = $listener4->preFoo(...), 20);
 
         $expected = [
-            $listener4->preFoo(...),
+            $listener4Listener,
             [$listener2, 'preFoo'],
             [$listener3, 'preFoo'],
             [$listener1, 'preFoo'],
         ];
 
-        $this->assertEquals($expected, $this->dispatcher->getListeners('pre.foo'));
+        $this->assertSame($expected, $this->dispatcher->getListeners('pre.foo'));
     }
 
     public function testGetAllListenersSortsByPriority()
@@ -374,6 +374,38 @@ class EventDispatcherTest extends TestCase
         $this->dispatcher->removeListener('foo', [$test, 'foo']);
         $this->dispatcher->addListener('bar', [$factory, 'foo'], 3);
         $this->assertSame(['bar' => [[$test, 'foo']]], $this->dispatcher->getListeners());
+    }
+
+    public function testGetListenersWhenLazyListenerAddsListeners()
+    {
+        $test1 = new TestWithDispatcher();
+        $test2 = new TestWithDispatcher();
+        $test3 = new TestWithDispatcher();
+        $test4 = new TestWithDispatcher();
+        $test1->name = '1';
+        $test2->name = '2';
+        $test3->name = '3';
+        $test4->name = '4';
+        $dispatcher = $this->dispatcher;
+        $factory = static function () use ($dispatcher, $test2, $test3, $test4) {
+            $dispatcher->addListener('foo', [$test3, 'foo'], 5);
+            $dispatcher->addListener('foo', [$test4, 'foo']);
+
+            return $test2;
+        };
+
+        $this->dispatcher->addListener('foo', [$test1, 'foo']);
+        $this->dispatcher->addListener('foo', [$factory, 'foo']);
+
+        $expected = [
+            [$test3, 'foo'],
+            [$test1, 'foo'],
+            [$test2, 'foo'],
+            [$test4, 'foo'],
+        ];
+
+        $this->assertSame($expected, $this->dispatcher->getListeners('foo'));
+        $this->assertSame($expected, $this->dispatcher->getListeners('foo'));
     }
 
     public function testMutatingWhilePropagationIsStopped()

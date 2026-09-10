@@ -18,6 +18,7 @@ use Symfony\Component\PropertyInfo\Extractor\PhpStanExtractor;
 use Symfony\Component\PropertyInfo\Tests\Fixtures\Clazz;
 use Symfony\Component\PropertyInfo\Tests\Fixtures\ConstructorDummy;
 use Symfony\Component\PropertyInfo\Tests\Fixtures\ConstructorDummyWithoutDocBlock;
+use Symfony\Component\PropertyInfo\Tests\Fixtures\ConstructorDummyWithPropertyDocBlock;
 use Symfony\Component\PropertyInfo\Tests\Fixtures\ConstructorDummyWithVarTagsDocBlock;
 use Symfony\Component\PropertyInfo\Tests\Fixtures\DefaultValue;
 use Symfony\Component\PropertyInfo\Tests\Fixtures\DockBlockFallback;
@@ -35,10 +36,12 @@ use Symfony\Component\PropertyInfo\Tests\Fixtures\Extractor\PromotedPropertiesWi
 use Symfony\Component\PropertyInfo\Tests\Fixtures\IFace;
 use Symfony\Component\PropertyInfo\Tests\Fixtures\IntRangeDummy;
 use Symfony\Component\PropertyInfo\Tests\Fixtures\InvalidDummy;
+use Symfony\Component\PropertyInfo\Tests\Fixtures\MultiParameterAdderDocDummy;
 use Symfony\Component\PropertyInfo\Tests\Fixtures\ParentDummy;
 use Symfony\Component\PropertyInfo\Tests\Fixtures\Php80Dummy;
 use Symfony\Component\PropertyInfo\Tests\Fixtures\Php80PromotedDummy;
 use Symfony\Component\PropertyInfo\Tests\Fixtures\PhpStanPseudoTypesDummy;
+use Symfony\Component\PropertyInfo\Tests\Fixtures\RejectedCandidateDocDummy;
 use Symfony\Component\PropertyInfo\Tests\Fixtures\RootDummy\RootDummyItem;
 use Symfony\Component\PropertyInfo\Tests\Fixtures\TraitUsage\AnotherNamespace\DummyInAnotherNamespace;
 use Symfony\Component\PropertyInfo\Tests\Fixtures\TraitUsage\DummyUsedInTrait;
@@ -61,6 +64,17 @@ class PhpStanExtractorTest extends TestCase
     {
         $this->extractor = new PhpStanExtractor();
         $this->phpDocExtractor = new PhpDocExtractor();
+    }
+
+    public function testAdderWithSeveralRequiredParametersIsIgnored()
+    {
+        $this->assertNull($this->extractor->getType(MultiParameterAdderDocDummy::class, 'link'));
+    }
+
+    public function testRejectedCandidateMethodsAreIgnored()
+    {
+        $this->assertNull($this->extractor->getType(RejectedCandidateDocDummy::class, 'foo'));
+        $this->assertNull($this->extractor->getType(RejectedCandidateDocDummy::class, 'bar'));
     }
 
     #[DataProvider('typesProvider')]
@@ -312,7 +326,7 @@ class PhpStanExtractorTest extends TestCase
         yield ['date', Type::int()];
         yield ['timezone', Type::object(\DateTimeZone::class)];
         yield ['dateObject', Type::object(\DateTimeInterface::class)];
-        yield ['dateTime', Type::int()];
+        yield ['dateTime', null];
         yield ['ddd', null];
     }
 
@@ -333,6 +347,21 @@ class PhpStanExtractorTest extends TestCase
         yield ['dateTime', null];
         yield ['mixed', null];
         yield ['timezone', null];
+    }
+
+    #[DataProvider('constructorTypesWithPropertyDocBlockProvider')]
+    public function testExtractConstructorTypesIgnoresTheDocBlockOfAPlainProperty(string $property)
+    {
+        $this->assertNull($this->extractor->getTypeFromConstructor(ConstructorDummyWithPropertyDocBlock::class, $property));
+    }
+
+    /**
+     * @return iterable<array{0: string}>
+     */
+    public static function constructorTypesWithPropertyDocBlockProvider(): iterable
+    {
+        yield ['date'];
+        yield ['objectsArray'];
     }
 
     #[DataProvider('constructorTypesOfParentClassProvider')]
@@ -461,7 +490,7 @@ class PhpStanExtractorTest extends TestCase
     #[DataProvider('allowPrivateAccessProvider')]
     public function testAllowPrivateAccess(bool $allowPrivateAccess, Type $expectedType)
     {
-        $extractor = new PhpStanExtractor(allowPrivateAccess: $allowPrivateAccess);
+        $extractor = new PhpStanExtractor(null, null, null, $allowPrivateAccess);
 
         $this->assertEquals($expectedType, $extractor->getType(DummyPropertyAndGetterWithDifferentTypes::class, 'foo'));
     }

@@ -40,6 +40,10 @@ final class PhpGenerator
 {
     use PhpGeneratorTrait;
 
+    private const JSON_ENCODE_FLAGS = \JSON_PRESERVE_ZERO_FRACTION | \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE;
+    private const THROWING_JSON_ENCODE_FLAGS_EXPRESSION = '\\JSON_THROW_ON_ERROR | \\JSON_PRESERVE_ZERO_FRACTION | \\JSON_UNESCAPED_SLASHES | \\JSON_UNESCAPED_UNICODE';
+    private const MAX_DEPTH = 512;
+
     private string $yieldBuffer = '';
 
     public function __construct(
@@ -78,7 +82,7 @@ final class PhpGenerator
             .$this->line('    try {', $context)
             .$yields
             .$this->line('    } catch (\\JsonException $e) {', $context)
-            .$this->line('        throw new \\'.NotEncodableValueException::class.'($e->getMessage(), 0, $e);', $context)
+            .$this->line(\sprintf('        throw new \\%s("Cannot encode \\"%s\\" to JSON: {$e->getMessage()}.", 0, $e);', NotEncodableValueException::class, addcslashes($dataModel->getType(), '\\')), $context)
             .$this->line('    }', $context)
             .$this->line('};', $context);
     }
@@ -130,8 +134,8 @@ final class PhpGenerator
             --$context['indentation_level'];
 
             $generators = [
-                $node->getIdentifier() => $this->line('$generators[\''.$node->getIdentifier().'\'] = static function ($data, $depth) use ($transformers, $options, &$generators) {', $context)
-                    .$this->line('    if ($depth >= 512) {', $context)
+                $node->getIdentifier() => $this->line('$generators['.var_export($node->getIdentifier(), true).'] = static function ($data, $depth) use ($transformers, $options, &$generators) {', $context)
+                    .$this->line('    if ($depth >= '.self::MAX_DEPTH.') {', $context)
                     .$this->line('        throw new \\'.NotEncodableValueException::class.'(\'Maximum stack depth exceeded\');', $context)
                     .$this->line('    }', $context)
                     .$yields
@@ -166,7 +170,7 @@ final class PhpGenerator
             return $this->yield($this->encode($accessor, $context), $context);
         }
 
-        if ($context['depth'] >= 512) {
+        if ($context['depth'] >= self::MAX_DEPTH) {
             return $this->line('throw new '.NotEncodableValueException::class.'(\'Maximum stack depth exceeded\');', $context);
         }
 
@@ -227,8 +231,8 @@ final class PhpGenerator
             $keyAccessor = $dataModelNode->getKeyNode()->getAccessor();
 
             $escapedKey = $dataModelNode->getType()->getCollectionKeyType()->isIdentifiedBy(TypeIdentifier::INT)
-                ? "$keyAccessor = is_int($keyAccessor) ? $keyAccessor : \substr(\json_encode($keyAccessor), 1, -1);"
-                : "$keyAccessor = \substr(\json_encode($keyAccessor), 1, -1);";
+                ? "$keyAccessor = is_int($keyAccessor) ? $keyAccessor : \substr(\json_encode($keyAccessor, ".self::THROWING_JSON_ENCODE_FLAGS_EXPRESSION.'), 1, -1);'
+                : "$keyAccessor = \substr(\json_encode($keyAccessor, ".self::THROWING_JSON_ENCODE_FLAGS_EXPRESSION.'), 1, -1);';
 
             $php = $this->yieldInterpolatedString('{', $context)
                 .$this->flushYieldBuffer($context)
@@ -251,7 +255,7 @@ final class PhpGenerator
 
         if ($dataModelNode instanceof ObjectNode) {
             if ($valueObjectTransformerId = $this->getValueObjectTransformerId($dataModelNode->getType()->getClassName())) {
-                $rawValue = "\$transformers->get('$valueObjectTransformerId')->transform({$dataModelNode->getAccessor()}, \$options)";
+                $rawValue = '$transformers->get('.var_export($valueObjectTransformerId, true).")->transform({$dataModelNode->getAccessor()}, \$options)";
 
                 return $this->yield($this->encode($rawValue, $context), $context);
             }
@@ -260,7 +264,7 @@ final class PhpGenerator
                 $depthArgument = ($context['generating_generator'] ?? false) ? '$depth + 1' : (string) $context['depth'];
 
                 return $this->flushYieldBuffer($context)
-                    .$this->line('yield from $generators[\''.$dataModelNode->getIdentifier().'\']('.$accessor.', '.$depthArgument.');', $context);
+                    .$this->line('yield from $generators['.var_export($dataModelNode->getIdentifier(), true).']('.$accessor.', '.$depthArgument.');', $context);
             }
 
             ++$context['depth'];
@@ -271,7 +275,7 @@ final class PhpGenerator
             $prefixIsCommaForSure = false;
 
             foreach ($dataModelNode->getProperties() as $name => $propertyNode) {
-                $encodedName = json_encode($name);
+                $encodedName = json_encode($name, self::JSON_ENCODE_FLAGS);
                 if (false === $encodedName) {
                     throw new RuntimeException(\sprintf('Cannot encode "%s"', $name));
                 }
@@ -349,7 +353,7 @@ final class PhpGenerator
      */
     private function encode(string $value, array $context): string
     {
-        return "\json_encode($value, \\JSON_THROW_ON_ERROR, ". 512 - $context['depth'].')';
+        return "\json_encode($value, ".self::THROWING_JSON_ENCODE_FLAGS_EXPRESSION.', '.(self::MAX_DEPTH - $context['depth']).')';
     }
 
     /**

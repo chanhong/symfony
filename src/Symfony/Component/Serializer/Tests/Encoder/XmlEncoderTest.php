@@ -27,6 +27,7 @@ use Symfony\Component\Serializer\Tests\Fixtures\EnvelopeNormalizer;
 use Symfony\Component\Serializer\Tests\Fixtures\EnvelopeObject;
 use Symfony\Component\Serializer\Tests\Fixtures\NormalizableTraversableDummy;
 use Symfony\Component\Serializer\Tests\Fixtures\ScalarDummy;
+use Symfony\Component\Serializer\Tests\Fixtures\ScalarTraversableDummy;
 
 class XmlEncoderTest extends TestCase
 {
@@ -306,6 +307,13 @@ class XmlEncoderTest extends TestCase
         $this->encoder->decode('<?xml version="1.0"?><!DOCTYPE foo><foo></foo>', 'foo');
     }
 
+    public function testDecodeWithoutRootNode()
+    {
+        $this->expectException(UnexpectedValueException::class);
+        $this->expectExceptionMessage('Invalid XML data, it does not contain a root node.');
+        $this->encoder->decode('<?xml version="1.0"?><foo></foo>', 'xml', [XmlEncoder::DECODER_IGNORED_NODE_TYPES => [\XML_ELEMENT_NODE]]);
+    }
+
     public function testDecodeScalar()
     {
         $source = '<?xml version="1.0"?>'."\n".
@@ -414,8 +422,27 @@ class XmlEncoderTest extends TestCase
 
     public function testEncodeException()
     {
+        if (\LIBXML_LOADED_VERSION >= 21300) {
+            $this->markTestSkipped('libxml outputs a replacement character reference (&#xFFFD;) instead of failing.');
+        }
+
         $this->expectException(NotEncodableValueException::class);
         $this->encoder->encode('Invalid character: '.\chr(7), 'xml');
+    }
+
+    public function testEncodeNestedTraversableWhenNormalizable()
+    {
+        $serializer = new Serializer([new CustomNormalizer()], ['xml' => new XmlEncoder()]);
+
+        $expected = <<<'XML'
+            <?xml version="1.0"?>
+            <response><scalar>normalized</scalar><nested><foo>normalizedFoo</foo><bar>normalizedBar</bar></nested></response>
+
+            XML;
+
+        $data = ['scalar' => new ScalarTraversableDummy(), 'nested' => new NormalizableTraversableDummy()];
+
+        $this->assertSame($expected, $serializer->serialize($data, 'xml'));
     }
 
     public function testDecode()
@@ -751,6 +778,20 @@ class XmlEncoderTest extends TestCase
         ];
         $xml = $this->encoder->encode($obj, 'xml');
         $this->assertEquals($expected, $this->encoder->decode($xml, 'xml'));
+    }
+
+    public function testDecodeItemWithAdditionalAttributes()
+    {
+        $source = '<?xml version="1.0"?>'."\n".
+            '<response><item key="0" foo="bar"/><item key="1" foo="baz">qux</item><item key="2">quux</item></response>'."\n";
+
+        $expected = [
+            0 => ['@key' => 0, '@foo' => 'bar', '#' => ''],
+            1 => ['@key' => 1, '@foo' => 'baz', '#' => 'qux'],
+            2 => 'quux',
+        ];
+
+        $this->assertSame($expected, $this->encoder->decode($source, 'xml'));
     }
 
     public function testDecodeInvalidXml()

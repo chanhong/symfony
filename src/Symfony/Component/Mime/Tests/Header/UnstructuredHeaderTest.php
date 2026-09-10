@@ -11,7 +11,9 @@
 
 namespace Symfony\Component\Mime\Tests\Header;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\Mime\Exception\RfcComplianceException;
 use Symfony\Component\Mime\Header\UnstructuredHeader;
 
 class UnstructuredHeaderTest extends TestCase
@@ -111,7 +113,7 @@ class UnstructuredHeaderTest extends TestCase
     public function testEncodedWordsAreUsedToEncodedNonPrintableAscii()
     {
         // SPACE and TAB permitted
-        $nonPrintableBytes = array_merge(range(0x00, 0x08), range(0x10, 0x19), [0x7F]);
+        $nonPrintableBytes = array_merge(range(0x00, 0x08), range(0x0A, 0x1F), [0x7F]);
         foreach ($nonPrintableBytes as $byte) {
             $char = pack('C', $byte);
             $encodedChar = \sprintf('=%02X', $byte);
@@ -204,6 +206,17 @@ class UnstructuredHeaderTest extends TestCase
         );
     }
 
+    public function testWhitespaceRunsBetweenEncodedWordsAreEncodedTogether()
+    {
+        // decoders ignore linear whitespace between two adjacent encoded words (RFC 2047 section 6.2),
+        // so whitespace runs of any length must be folded into the encoded words themselves
+        $header = new UnstructuredHeader('Subject', 'Fabïen  Pötencier  Länge');
+        $this->assertSame('=?utf-8?Q?Fab=C3=AFen__P=C3=B6tencier__L=C3=A4nge?=', $header->getBodyAsString());
+
+        $header = new UnstructuredHeader('Subject', "Fabïen \t Pötencier");
+        $this->assertSame('=?utf-8?Q?Fab=C3=AFen_=09_P=C3=B6tencier?=', $header->getBodyAsString());
+    }
+
     public function testLanguageInformationAppearsInEncodedWords()
     {
         /* -- RFC 2231, 5.
@@ -241,5 +254,34 @@ class UnstructuredHeaderTest extends TestCase
     {
         $header = new UnstructuredHeader('Subject', 'test');
         $this->assertEquals('test', $header->getBody());
+    }
+
+    #[DataProvider('provideInvalidNames')]
+    public function testInvalidNameIsRejected(string $name)
+    {
+        $this->expectException(RfcComplianceException::class);
+
+        new UnstructuredHeader($name, 'value');
+    }
+
+    public static function provideInvalidNames()
+    {
+        yield [""];
+        yield ["X-A\r\nX-Injected: value"];
+        yield ["X-A\nX-Injected: value"];
+        yield ["X-A\rX-Injected: value"];
+        yield ["X-A: value\r\nX-Injected"];
+        yield ["X A"];
+        yield ["X-A\t"];
+        yield ["X-\x00A"];
+        yield ["X-\x7fA"];
+        yield ["X-\xc3\xa9"];
+    }
+
+    public function testValidNamesAreAccepted()
+    {
+        foreach (['Subject', 'X-Custom-Header', 'x-lower', '!#$%&\'*+-.^_`|~', 'Header-With-Digits-123', 'h:X-Mailgun-Tag', 'o:tag', 'v:my-var'] as $name) {
+            $this->assertSame($name, (new UnstructuredHeader($name, 'value'))->getName());
+        }
     }
 }

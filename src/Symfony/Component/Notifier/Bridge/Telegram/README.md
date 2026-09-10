@@ -69,6 +69,28 @@ $chatMessage->options($telegramOptions);
 $chatter->send($chatMessage);
 ```
 
+An inline keyboard is a list of button rows. Every call to `inlineKeyboard()`
+appends one row, so call it once per row to spread the buttons over several
+lines:
+
+```php
+$telegramOptions = (new TelegramOptions())
+    ->chatId('@symfonynotifierdev')
+    ->replyMarkup((new InlineKeyboardMarkup())
+        ->inlineKeyboard([
+            (new InlineKeyboardButton('Yes'))->callbackData('yes'),
+            (new InlineKeyboardButton('No'))->callbackData('no'),
+        ])
+        ->inlineKeyboard([
+            (new InlineKeyboardButton('Visit symfony.com'))
+                ->url('https://symfony.com/'),
+        ])
+    );
+```
+
+The keyboard above shows "Yes" and "No" side by side on the first row, and the
+link alone on the second one.
+
 Adding files to a Message
 -------------------------
 
@@ -319,6 +341,13 @@ $telegramOptions = (new TelegramOptions())
     );
 ```
 
+Sponsor
+-------
+
+This package is looking for a [backer][1].
+
+Help Symfony by [sponsoring][3] its development!
+
 Resources
 ---------
 
@@ -326,3 +355,6 @@ Resources
  * [Report issues](https://github.com/symfony/symfony/issues) and
    [send Pull Requests](https://github.com/symfony/symfony/pulls)
    in the [main Symfony repository](https://github.com/symfony/symfony)
+
+[1]: https://symfony.com/backers
+[3]: https://symfony.com/sponsor

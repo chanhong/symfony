@@ -229,6 +229,12 @@ trait TypeFactoryTrait
     }
 
     /**
+     * Builds an {@see ObjectShapeType} from a string-keyed shape map.
+     *
+     * Each entry is either a bare {@see Type} (treated as a required key) or an
+     * array describing the value type and whether the key is optional; a missing
+     * `optional` key defaults to `false`. Object shapes are always sealed.
+     *
      * @param array<string, array{type: Type, optional?: bool}|Type> $shape
      */
     public static function objectShape(array $shape): ObjectShapeType
@@ -451,7 +457,7 @@ trait TypeFactoryTrait
 
             $valueType = $valueTypes ? CollectionType::mergeCollectionValueTypes($valueTypes) : Type::mixed();
 
-            return self::collection($type, $valueType, $keyType, \is_array($value) && [] !== $value && array_is_list($value));
+            return self::collection($type, $valueType, $keyType, \is_array($value) && $value && array_is_list($value));
         }
 
         if ($value instanceof \ArrayAccess) {

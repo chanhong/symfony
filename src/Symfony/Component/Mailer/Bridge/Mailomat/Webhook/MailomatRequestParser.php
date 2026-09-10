@@ -34,6 +34,7 @@ final class MailomatRequestParser extends AbstractRequestParser
 
     public function __construct(
         private readonly MailomatPayloadConverter $converter,
+        private readonly int $timestampTolerance = 43200,
     ) {
     }
 
@@ -57,6 +58,8 @@ final class MailomatRequestParser extends AbstractRequestParser
             throw new InvalidArgumentException('A non-empty secret is required.');
         }
 
+        $this->validateSignature($request->headers, $secret);
+
         $content = $request->toArray();
 
         if (
@@ -69,8 +72,6 @@ final class MailomatRequestParser extends AbstractRequestParser
             throw new RejectWebhookException(406, 'Payload is malformed.');
         }
 
-        $this->validateSignature($request->headers, $secret);
-
         try {
             return $this->converter->convert($content);
         } catch (ParseException $e) {
@@ -81,10 +82,25 @@ final class MailomatRequestParser extends AbstractRequestParser
     private function validateSignature(HeaderBag $headers, #[\SensitiveParameter] string $secret): void
     {
         // see https://api.mailomat.swiss/docs/#tag/webhook-security
-        $data = implode('.', [$headers->get(self::HEADER_ID), $headers->get(self::HEADER_EVENT), $headers->get(self::HEADER_TIMESTAMP)]);
+        $signatureHeader = $headers->get(self::HEADER_SIGNATURE);
+        if (!$signatureHeader || !str_contains($signatureHeader, '=')) {
+            throw new RejectWebhookException(406, 'Signature is wrong.');
+        }
 
-        [$algo, $signature] = explode('=', $headers->get(self::HEADER_SIGNATURE));
-        if (!hash_equals(hash_hmac($algo, $data, $secret), $signature)) {
+        [$algo, $signature] = explode('=', $signatureHeader, 2);
+
+        $timestamp = $headers->get(self::HEADER_TIMESTAMP);
+        if ($this->timestampTolerance > 0 && (!ctype_digit((string) $timestamp) || abs(time() - (int) $timestamp) > $this->timestampTolerance)) {
+            throw new RejectWebhookException(406, 'Timestamp is outside the tolerance window.');
+        }
+
+        $data = implode('.', [
+            $headers->get(self::HEADER_ID),
+            $headers->get(self::HEADER_EVENT),
+            $timestamp,
+        ]);
+
+        if ('sha256' !== $algo || !hash_equals(hash_hmac('sha256', $data, $secret), $signature)) {
             throw new RejectWebhookException(406, 'Signature is wrong.');
         }
     }

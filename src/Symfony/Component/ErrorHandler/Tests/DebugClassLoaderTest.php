@@ -62,6 +62,22 @@ class DebugClassLoaderTest extends TestCase
         $this->fail('DebugClassLoader did not register');
     }
 
+    #[RunInSeparateProcess]
+    public function testEnableClearsVendorPrefixCacheOnRemapChange()
+    {
+        $reflClass = new \ReflectionClass(DebugClassLoader::class);
+        $cacheProp = $reflClass->getProperty('vendorPrefixCache');
+        $remapProp = $reflClass->getProperty('namespaceRemappings');
+
+        DebugClassLoader::enable(['App' => 'Symfony']);
+        $cacheProp->setValue(null, ['App\\Foo' => 'Symfony']);
+
+        DebugClassLoader::enable(['App' => 'Acme']);
+
+        $this->assertSame([], $cacheProp->getValue(), 'enable() must clear the vendor prefix cache');
+        $this->assertSame(['App' => 'Acme'], $remapProp->getValue(), 'enable() must replace the namespace remappings');
+    }
+
     public function testThrowingClass()
     {
         $this->expectException(\Exception::class);
@@ -410,6 +426,44 @@ class DebugClassLoaderTest extends TestCase
         ], $deprecations);
     }
 
+    public function testVirtualUseWithAbstractClass()
+    {
+        // An abstract class can announce @method annotations the same way an interface does, to give
+        // subclasses time to implement the method before it becomes a real abstract requirement.
+        // ExtendsVirtualAbstractClass extends VirtualAbstract (abstract) and does not implement any of its
+        // @method annotations.
+
+        $deprecations = [];
+        set_error_handler(static function ($type, $msg) use (&$deprecations) { $deprecations[] = $msg; });
+        $e = error_reporting(\E_USER_DEPRECATED);
+
+        class_exists('Test\\'.ExtendsVirtualAbstractClass::class, true);
+
+        error_reporting($e);
+        restore_error_handler();
+
+        $this->assertSame([
+            'Class "Test\Symfony\Component\ErrorHandler\Tests\ExtendsVirtualAbstractClass" should implement method "Symfony\Component\ErrorHandler\Tests\Fixtures\VirtualAbstract::abstractClassMethod(): string".',
+            'Class "Test\Symfony\Component\ErrorHandler\Tests\ExtendsVirtualAbstractClass" should implement method "static Symfony\Component\ErrorHandler\Tests\Fixtures\VirtualAbstract::abstractStaticMethod(): \stdClass": Description.',
+        ], $deprecations);
+    }
+
+    public function testVirtualUseWithAbstractClassImplementingTheMethod()
+    {
+        // When the concrete subclass already declares the announced @method, no deprecation is raised.
+
+        $deprecations = [];
+        set_error_handler(static function ($type, $msg) use (&$deprecations) { $deprecations[] = $msg; });
+        $e = error_reporting(\E_USER_DEPRECATED);
+
+        class_exists('Test\\'.ExtendsVirtualAbstractClassImpl::class, true);
+
+        error_reporting($e);
+        restore_error_handler();
+
+        $this->assertSame([], $deprecations);
+    }
+
     public function testVirtualUseWithMagicCallInterface()
     {
         // When an interface uses "@method" annotations and, at the same time, requires the __call method to be
@@ -560,6 +614,7 @@ class DebugClassLoaderTest extends TestCase
             'Method "Symfony\Component\ErrorHandler\Tests\Fixtures\ReturnTypeParent::never()" might add "never" as a native return type declaration in the future. Do the same in child class "Test\Symfony\Component\ErrorHandler\Tests\ReturnType" now to avoid errors or add an explicit @return annotation to suppress this message.',
             'Method "Symfony\Component\ErrorHandler\Tests\Fixtures\ReturnTypeParent::null()" might add "null" as a native return type declaration in the future. Do the same in child class "Test\Symfony\Component\ErrorHandler\Tests\ReturnType" now to avoid errors or add an explicit @return annotation to suppress this message.',
             'Method "Symfony\Component\ErrorHandler\Tests\Fixtures\ReturnTypeParent::classConstant()" might add "string" as a native return type declaration in the future. Do the same in child class "Test\Symfony\Component\ErrorHandler\Tests\ReturnType" now to avoid errors or add an explicit @return annotation to suppress this message.',
+            'Method "Symfony\Component\ErrorHandler\Tests\Fixtures\ReturnTypeInterface::interfaceClassConstant()" might add "string" as a native return type declaration in the future. Do the same in implementation "Test\Symfony\Component\ErrorHandler\Tests\ReturnType" now to avoid errors or add an explicit @return annotation to suppress this message.',
         ], $deprecations);
     }
 
@@ -577,6 +632,12 @@ class DebugClassLoaderTest extends TestCase
         $this->assertSame([
             'Method "Symfony\Component\ErrorHandler\Tests\Fixtures\ReturnTypeParentPhp83::classConstantWithType()" might add "string" as a native return type declaration in the future. Do the same in child class "Test\Symfony\Component\ErrorHandler\Tests\ReturnTypePhp83" now to avoid errors or add an explicit @return annotation to suppress this message.',
         ], $deprecations);
+    }
+
+    public function testClassConstantReturnTypeDoesNotTriggerAutoloading()
+    {
+        $this->assertTrue(class_exists(Fixtures\ReturnTypeClassConstant::class, true));
+        $this->assertFalse(class_exists(Fixtures\ReturnTypeClassConstantHolder::class, false));
     }
 
     public function testOverrideFinalProperty()
@@ -721,6 +782,14 @@ class ClassLoader
         } elseif ('Test\\'.ExtendsVirtualMagicCallInterface::class === $class) {
             eval('namespace Test\\'.__NAMESPACE__.'; class ExtendsVirtualMagicCallInterface implements \\'.__NAMESPACE__.'\Fixtures\VirtualInterfaceWithCall {
                 public function __call(string $name, array $arguments): mixed { return null; }
+            }');
+        } elseif ('Test\\'.ExtendsVirtualAbstractClass::class === $class) {
+            eval('namespace Test\\'.__NAMESPACE__.'; class ExtendsVirtualAbstractClass extends \\'.__NAMESPACE__.'\Fixtures\VirtualAbstract {
+            }');
+        } elseif ('Test\\'.ExtendsVirtualAbstractClassImpl::class === $class) {
+            eval('namespace Test\\'.__NAMESPACE__.'; class ExtendsVirtualAbstractClassImpl extends \\'.__NAMESPACE__.'\Fixtures\VirtualAbstract {
+                public function abstractClassMethod(): string { return ""; }
+                public static function abstractStaticMethod(): \stdClass { return new \stdClass(); }
             }');
         } elseif ('Test\\'.ReturnType::class === $class) {
             return $fixtureDir.\DIRECTORY_SEPARATOR.'ReturnType.php';

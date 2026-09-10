@@ -133,7 +133,7 @@ final class RegisterCommandArgumentLocatorsPass implements CompilerPassInterface
                         // Do not attempt to register enum typed arguments if not already present in bindings
                         continue;
                     } elseif (!$p->allowsNull()) {
-                        $invalidBehavior = ContainerInterface::RUNTIME_EXCEPTION_ON_INVALID_REFERENCE;
+                        $invalidBehavior = $autowireAttributes ? ContainerInterface::EXCEPTION_ON_INVALID_REFERENCE : ContainerInterface::RUNTIME_EXCEPTION_ON_INVALID_REFERENCE;
                     }
 
                     // Skip console-specific types that are resolved by other resolvers
@@ -142,7 +142,6 @@ final class RegisterCommandArgumentLocatorsPass implements CompilerPassInterface
                     }
 
                     if ($autowireAttributes) {
-                        $invalidBehavior = ContainerInterface::EXCEPTION_ON_INVALID_REFERENCE;
                         $attribute = $autowireAttributes[0]->newInstance();
                         $value = $parameterBag->resolveValue($attribute->value);
 
@@ -174,8 +173,10 @@ final class RegisterCommandArgumentLocatorsPass implements CompilerPassInterface
                         $arguments[$p->name] = new Reference($erroredId, ContainerInterface::RUNTIME_EXCEPTION_ON_INVALID_REFERENCE);
                         ++$erroredIds;
                     } else {
+                        $targetAttribute = null;
+                        $name = Target::parseName($p, $targetAttribute);
                         $target = preg_replace('/(^|[(|&])\\\\/', '\1', $target);
-                        $arguments[$p->name] = $type ? new TypedReference($target, $type, $invalidBehavior, Target::parseName($p)) : new Reference($target, $invalidBehavior);
+                        $arguments[$p->name] = $type ? new TypedReference($target, $type, $invalidBehavior, $name, $targetAttribute ? [$targetAttribute] : []) : new Reference($target, $invalidBehavior);
                     }
                 }
 

@@ -33,6 +33,25 @@ class InlineTest extends TestCase
         $this->assertSame($value, Inline::parse($yaml, $flags), \sprintf('::parse() converts an inline YAML to a PHP structure (%s)', $yaml));
     }
 
+    #[DataProvider('getNanRepresentations')]
+    public function testParseNan(string $yaml)
+    {
+        $this->assertNan(Inline::parse($yaml));
+    }
+
+    public static function getNanRepresentations(): iterable
+    {
+        yield ['.nan'];
+        yield ['.NaN'];
+        yield ['.NAN'];
+    }
+
+    public function testDumpNan()
+    {
+        $this->assertSame('.NaN', Inline::dump(\NAN));
+        $this->assertNan(Inline::parse(Inline::dump(\NAN)));
+    }
+
     #[DataProvider('getTestsForParseWithMapObjects')]
     public function testParseWithMapObjects($yaml, $value, $flags = Yaml::PARSE_OBJECT_FOR_MAP)
     {
@@ -113,6 +132,13 @@ class InlineTest extends TestCase
         $this->expectException(ParseException::class);
         $this->expectExceptionMessageMatches('#The string "!php/enum SomeEnum::Foo" could not be parsed as an enum.*#');
         Inline::parse('!php/enum SomeEnum::Foo', Yaml::PARSE_EXCEPTION_ON_INVALID_TYPE);
+    }
+
+    public function testParsePhpObjectThrowsExceptionOnNonStringScalar()
+    {
+        $this->expectException(ParseException::class);
+        $this->expectExceptionMessage('The "!php/object" tag only supports a string value, got "array"');
+        Inline::parse('!php/object !php/enum Symfony\Component\Yaml\Tests\Fixtures\FooUnitEnum', Yaml::PARSE_OBJECT | Yaml::PARSE_CONSTANT);
     }
 
     #[DataProvider('getTestsForDump')]
@@ -243,6 +269,7 @@ class InlineTest extends TestCase
             'map' => ['{ key: *var }', ['key' => 'var-value']],
             'list-in-map' => ['{ key: [*var] }', ['key' => ['var-value']]],
             'map-in-map' => ['{ foo: { bar: *var } }', ['foo' => ['bar' => 'var-value']]],
+            'map-followed-by-a-comment' => ['{ key: *var  # comment }', ['key' => 'var-value']],
         ];
     }
 
@@ -324,6 +351,7 @@ class InlineTest extends TestCase
             ['true', true],
             ['12', 12],
             ['-12', -12],
+            ['+12', 12],
             ['1_2', 12],
             ['_12', '_12'],
             ['12_', 12],
@@ -334,6 +362,7 @@ class InlineTest extends TestCase
             ['123.45_67', 123.4567],
             ['0x4D2', 0x4D2],
             ['0x_4_D_2_', 0x4D2],
+            ['0X4D2', '0X4D2'],
             ['0o2333', 0o2333],
             ['0o_2_3_3_3', 0o2333],
             ['.Inf', -log(0)],
@@ -509,7 +538,12 @@ class InlineTest extends TestCase
             ['1234', 0x4D2],
             ['1243', 0o2333],
             ["'0x_4_D_2_'", '0x_4_D_2_'],
+            ['0X4D2', '0X4D2'],
             ["'0_2_3_3_3'", '0_2_3_3_3'],
+            ["'0o2333'", '0o2333'],
+            ["'+0o2333'", '+0o2333'],
+            ["'0o_2_3_3_3'", '0o_2_3_3_3'],
+            ['0O2333', '0O2333'],
             ['.Inf', -log(0)],
             ['-.Inf', log(0)],
             ["'686e444'", '686e444'],
@@ -540,6 +574,8 @@ class InlineTest extends TestCase
             ['[\'foo,bar\', \'foo bar\']', ['foo,bar', 'foo bar']],
 
             // mappings
+            ['{}', []],
+            ['{ foo: {} }', ['foo' => []]],
             ['{ foo: bar, bar: foo, \'false\': false, \'null\': null, integer: 12 }', ['foo' => 'bar', 'bar' => 'foo', 'false' => false, 'null' => null, 'integer' => 12]],
             ['{ foo: bar, bar: \'foo: bar\' }', ['foo' => 'bar', 'bar' => 'foo: bar']],
 
@@ -784,6 +820,7 @@ class InlineTest extends TestCase
             'invalid characters' => ['!!binary "SGVsbG8#d29ybGQ="', '/The base64 encoded data \(.*\) contains invalid characters/'],
             'too many equals characters' => ['!!binary "SGVsbG8gd29yb==="', '/The base64 encoded data \(.*\) contains invalid characters/'],
             'misplaced equals character' => ['!!binary "SGVsbG8gd29ybG=Q"', '/The base64 encoded data \(.*\) contains invalid characters/'],
+            'unparsable scalar value' => ['!!binary !php/object a', '/The base64 encoded data \(\) contains invalid characters/'],
         ];
     }
 
@@ -1114,5 +1151,84 @@ class InlineTest extends TestCase
         $this->assertSame(['foo', null, 'bar'], Inline::parse('[foo, , bar]'));
         $this->assertSame([null, 'foo', 'bar'], Inline::parse('[, foo, bar]'));
         $this->assertSame(['foo', 'bar'], Inline::parse('[foo, bar, ]'));
+    }
+
+    public function testFlowAndBlockProduceSameOutputForAmpersandPrefixedItems()
+    {
+        $this->assertSame([null], Inline::parse('[&string4]'));
+        $this->assertSame(['foo' => null], Inline::parse('{foo: &string4}'));
+
+        $this->assertSame(['&string3'], Inline::parse('[!!str &string3]'));
+        $this->assertSame(['foo' => '&string3'], Inline::parse('{foo: !!str &string3}'));
+
+        $yaml = <<<YAML
+            block:
+                - '&string1'
+                - "&string2"
+                - !!str &string3
+                - &string4
+            flow: ['&string1', "&string2", !!str &string3, &string4 ]
+            YAML;
+        $parsed = Yaml::parse($yaml);
+        $this->assertSame(['&string1', '&string2', '&string3', null], $parsed['block']);
+        $this->assertSame($parsed['block'], $parsed['flow']);
+    }
+
+    #[DataProvider('getAnchoredInlineValues')]
+    public function testParseAnchoredInlineValues(string $yaml, array $expected)
+    {
+        $this->assertSame($expected, Inline::parse($yaml));
+    }
+
+    public static function getAnchoredInlineValues(): iterable
+    {
+        yield 'double-quoted value in mapping' => [
+            '{ foo: &a "FOO", bar: *a }',
+            ['foo' => 'FOO', 'bar' => 'FOO'],
+        ];
+        yield 'single-quoted value in mapping' => [
+            "{ foo: &a 'FOO', bar: *a }",
+            ['foo' => 'FOO', 'bar' => 'FOO'],
+        ];
+        yield 'double-quoted value with braces in mapping' => [
+            '{ foo: &a "${FOO}", bar: *a }',
+            ['foo' => '${FOO}', 'bar' => '${FOO}'],
+        ];
+        yield 'double-quoted value with comma in mapping' => [
+            '{ foo: &a "a,b", bar: *a }',
+            ['foo' => 'a,b', 'bar' => 'a,b'],
+        ];
+        yield 'sequence value in mapping' => [
+            '{ foo: &a [a, b], bar: *a }',
+            ['foo' => ['a', 'b'], 'bar' => ['a', 'b']],
+        ];
+        yield 'mapping value in mapping' => [
+            '{ foo: &a { k: v }, bar: *a }',
+            ['foo' => ['k' => 'v'], 'bar' => ['k' => 'v']],
+        ];
+        yield 'double-quoted value in sequence' => [
+            '[&a "FOO", *a]',
+            ['FOO', 'FOO'],
+        ];
+        yield 'double-quoted value with braces in sequence' => [
+            '[&a "${FOO}", *a]',
+            ['${FOO}', '${FOO}'],
+        ];
+        yield 'sequence value in sequence' => [
+            '[&a [a, b], *a]',
+            [['a', 'b'], ['a', 'b']],
+        ];
+        yield 'plain scalar value in mapping' => [
+            '{ foo: &a bar, baz: *a }',
+            ['foo' => 'bar', 'baz' => 'bar'],
+        ];
+    }
+
+    public function testParseAnchoredMergeKey()
+    {
+        $this->assertSame(
+            ['k' => 'v', 'bar' => 2],
+            Inline::parse('{ <<: &a { k: v }, bar: 2 }'),
+        );
     }
 }

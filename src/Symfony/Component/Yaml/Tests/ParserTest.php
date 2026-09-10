@@ -138,10 +138,36 @@ class ParserTest extends TestCase
             - !text |
               first line
             YAML;
-        // @todo Fix the parser, eliminate this exception.
-        $this->expectException(ParseException::class);
-        $this->expectExceptionMessage('Unable to parse at line 2 (near "!text |").');
-        $this->parser->parse($yml, Yaml::PARSE_CUSTOM_TAGS);
+        $data = $this->parser->parse($yml, Yaml::PARSE_CUSTOM_TAGS);
+        $this->assertSameData([new TaggedValue('text', 'first line')], $data);
+    }
+
+    public function testTaggedBlockScalarsAsListItems()
+    {
+        $yml = <<<'YAML'
+            - !text |
+              first line
+              second line
+            - !text >-
+              folded
+              text
+            - !!binary |
+              SGVsbG8=
+            - plain
+            YAML;
+        $expected = [new TaggedValue('text', "first line\nsecond line\n"), new TaggedValue('text', 'folded text'), 'Hello', 'plain'];
+        $this->assertSameData($expected, $this->parser->parse($yml, Yaml::PARSE_CUSTOM_TAGS));
+    }
+
+    public function testTaggedBlockScalarInNestedList()
+    {
+        $yml = <<<'YAML'
+            foo:
+              - !text |
+                a
+                b
+            YAML;
+        $this->assertSameData(['foo' => [new TaggedValue('text', "a\nb")]], $this->parser->parse($yml, Yaml::PARSE_CUSTOM_TAGS));
     }
 
     #[DataProvider('getDataFormSpecifications')]
@@ -1225,6 +1251,24 @@ class ParserTest extends TestCase
         ));
     }
 
+    public function testParseAliasFollowedByAComment()
+    {
+        $this->assertSame([
+            'var' => 'var-value',
+            'scalar' => 'var-value',
+            'list' => ['var-value'],
+            'map' => ['key' => 'var-value', 'other' => 'plain'],
+        ], $this->parser->parse(<<<'EOF'
+            var: &var var-value
+            scalar: *var  # a comment
+            list:
+              - *var   # another comment
+            map: { key: *var,  # a comment inside a flow collection
+              other: plain }
+            EOF
+        ));
+    }
+
     public function testYamlDirective()
     {
         $yaml = <<<'EOF'
@@ -1261,6 +1305,16 @@ class ParserTest extends TestCase
         $this->expectExceptionMessage('Non-string keys are not supported. Quote your evaluable mapping keys instead');
 
         $this->parser->parse($yaml);
+    }
+
+    public function testUppercaseHexadecimalPrefixKeys()
+    {
+        $yaml = <<<'EOF'
+            0X4D2: foo
+            0x4D2: bar
+            EOF;
+
+        $this->assertSame(['0X4D2' => 'foo', 1234 => 'bar'], $this->parser->parse($yaml));
     }
 
     public function testExplicitStringCasting()
@@ -1726,6 +1780,26 @@ class ParserTest extends TestCase
         ];
 
         $this->assertSame($expected, $this->parser->parse($yaml));
+    }
+
+    public function testTrailingBackslashesBeforeNewlineInQuotedMultiLineString()
+    {
+        $yaml = <<<YAML
+            foobar: "foo\\\\
+                bar"
+            YAML;
+
+        $this->assertSame(['foobar' => 'foo\\ bar'], $this->parser->parse($yaml));
+    }
+
+    public function testTrailingBackslashInSingleQuotedMultiLineString()
+    {
+        $yaml = <<<YAML
+            foobar: 'foo\\
+                bar'
+            YAML;
+
+        $this->assertSame(['foobar' => 'foo\\ bar'], $this->parser->parse($yaml));
     }
 
     #[DataProvider('wrappedUnquotedStringsProvider')]
@@ -2374,6 +2448,22 @@ class ParserTest extends TestCase
                     param: "some"
                     YAML,
             ],
+            'mixed mapping with inline notation having separated lines with comments' => [
+                [
+                    'map' => [
+                        'key' => 'value',
+                        'a' => 'b',
+                    ],
+                    'param' => 'some',
+                ],
+                <<<YAML
+                    map: {  # a comment
+                        key: "value",  # another comment
+                        a: "b"
+                    }
+                    param: "some"
+                    YAML,
+            ],
             'mixed mapping with compact inline notation on one line' => [
                 [
                     'map' => [
@@ -2890,6 +2980,21 @@ class ParserTest extends TestCase
         $this->assertSame($expected, $this->parser->parse($yaml));
     }
 
+    public function testParseMergeKeyAliasFollowedByAComment()
+    {
+        $this->assertSame([
+            'base' => ['a' => 'foo'],
+            'derived' => ['a' => 'foo', 'b' => 'bar'],
+        ], $this->parser->parse(<<<'EOF'
+            base: &base
+                a: foo
+            derived:
+                <<: *base # a comment
+                b: bar
+            EOF
+        ));
+    }
+
     public function testParseReferencesOnMergeKeysWithMappingsParsedAsObjects()
     {
         $yaml = <<<YAML
@@ -3230,6 +3335,181 @@ class ParserTest extends TestCase
     public function testSkipBlankLines()
     {
         $this->assertSame(['foo' => [null]], (new Parser())->parse("foo:\n-\n\n"));
+    }
+
+    public function testParseRejectsDocumentsThatExceedTheDefaultNestingDepth()
+    {
+        $this->expectException(ParseException::class);
+        $this->expectExceptionMessage('Maximum nesting depth');
+
+        $yaml = "root:\n";
+        for ($i = 1; $i <= Parser::DEFAULT_MAX_NESTING_LEVEL + 1; ++$i) {
+            $yaml .= str_repeat('  ', $i).\sprintf("level%d:\n", $i);
+        }
+
+        $this->parser->parse($yaml);
+    }
+
+    public function testParseRejectsUnterminatedInlineSequencesThatExceedTheNestingDepth()
+    {
+        $this->expectException(ParseException::class);
+        $this->expectExceptionMessage('Maximum nesting depth of 128 exceeded');
+
+        $this->parser->parse(str_repeat('[', Parser::DEFAULT_MAX_NESTING_LEVEL + 1));
+    }
+
+    public function testParseRejectsUnterminatedInlineMappingsThatExceedTheNestingDepth()
+    {
+        $this->expectException(ParseException::class);
+        $this->expectExceptionMessage('Maximum nesting depth of 128 exceeded');
+
+        $this->parser->parse(str_repeat('{', Parser::DEFAULT_MAX_NESTING_LEVEL + 1));
+    }
+
+    public function testParseAcceptsInlineSequencesAtTheNestingDepth()
+    {
+        $expected = [];
+        for ($i = 1; $i < Parser::DEFAULT_MAX_NESTING_LEVEL; ++$i) {
+            $expected = [$expected];
+        }
+
+        $yaml = str_repeat('[', Parser::DEFAULT_MAX_NESTING_LEVEL).str_repeat(']', Parser::DEFAULT_MAX_NESTING_LEVEL);
+
+        $this->assertSame($expected, $this->parser->parse($yaml));
+    }
+
+    public function testParseRejectsDocumentsThatExceedTheConfiguredCollectionAliasLimit()
+    {
+        $parser = new Parser(Parser::DEFAULT_MAX_NESTING_LEVEL, 5);
+
+        $this->expectException(ParseException::class);
+        $this->expectExceptionMessage('Maximum number of collection aliases');
+
+        $yaml = <<<YAML
+            a0: &a0 [foo]
+            a1: &a1 [*a0, *a0, *a0]
+            payload: [*a1, *a1, *a1]
+            YAML;
+
+        $parser->parse($yaml);
+    }
+
+    public function testParseCountsTaggedValueCollectionAliases()
+    {
+        $parser = new Parser(Parser::DEFAULT_MAX_NESTING_LEVEL, 2);
+
+        $this->expectException(ParseException::class);
+        $this->expectExceptionMessage('Maximum number of collection aliases');
+
+        $yaml = <<<YAML
+            a: &a !my_tag [foo, bar]
+            b: *a
+            c: *a
+            d: *a
+            YAML;
+
+        $parser->parse($yaml, Yaml::PARSE_CUSTOM_TAGS);
+    }
+
+    public function testParseAcceptsScalarAliasesWithoutCountingThem()
+    {
+        $parser = new Parser(Parser::DEFAULT_MAX_NESTING_LEVEL, 1);
+
+        $yaml = <<<YAML
+            anchor: &val scalar_value
+            a: *val
+            b: *val
+            c: *val
+            d: *val
+            YAML;
+
+        $result = $parser->parse($yaml);
+
+        $this->assertSame('scalar_value', $result['a']);
+        $this->assertSame('scalar_value', $result['d']);
+    }
+
+    public function testParseAcceptsLargeCollectionAliasedOnce()
+    {
+        $items = implode(', ', array_map(static fn ($i) => "item$i", range(1, 500)));
+        $yaml = <<<YAML
+            defaults: &defaults [$items]
+            a: *defaults
+            YAML;
+
+        $result = $this->parser->parse($yaml);
+
+        $this->assertCount(500, $result['a']);
+    }
+
+    public function testParseRejectsBlockAliasesWhenDisabled()
+    {
+        $this->expectException(ParseException::class);
+        $this->expectExceptionMessage('Aliases are disabled');
+
+        $yaml = <<<YAML
+            defaults: &defaults [foo, bar]
+            a: *defaults
+            YAML;
+
+        $this->parser->parse($yaml, Yaml::PARSE_EXCEPTION_ON_ALIAS);
+    }
+
+    public function testParseRejectsInlineAliasesWhenDisabled()
+    {
+        $this->expectException(ParseException::class);
+        $this->expectExceptionMessage('Aliases are disabled');
+
+        $yaml = <<<YAML
+            defaults: &defaults [foo, bar]
+            a: [*defaults]
+            YAML;
+
+        $this->parser->parse($yaml, Yaml::PARSE_EXCEPTION_ON_ALIAS);
+    }
+
+    public function testParseHandlesLargeYamlHeaders()
+    {
+        $yaml = '%YAML:'.str_repeat('1', 100000)."\nfoo: bar\n";
+
+        $this->assertSame(['foo' => 'bar'], $this->parser->parse($yaml));
+    }
+
+    public function testParseHandlesLargeLeadingComments()
+    {
+        $yaml = '#'.str_repeat('comment', 20000)."\nfoo: bar\n";
+
+        $this->assertSame(['foo' => 'bar'], $this->parser->parse($yaml));
+    }
+
+    public function testParseHandlesLargeDocumentMarkers()
+    {
+        $yaml = '--- '.str_repeat('header', 20000)."\nfoo: bar\n...   ";
+
+        $this->assertSame(['foo' => 'bar'], $this->parser->parse($yaml));
+    }
+
+    public function testParseHandlesTrailingNewlinesAfterDocumentEndMarker()
+    {
+        $yaml = "---\nfoo: bar\n...\n\n";
+
+        $this->assertSame(['foo' => 'bar'], $this->parser->parse($yaml));
+    }
+
+    public function testParseInlineMappingWithAnchoredQuotedValueContainingBraces()
+    {
+        $this->assertSame(
+            ['foo' => '${FOO}', 'bar' => '${FOO}'],
+            $this->parser->parse('{ foo: &a "${FOO}", bar: *a }'),
+        );
+    }
+
+    public function testParseInlineMappingWithAnchoredQuotedValue()
+    {
+        $this->assertSame(
+            ['foo' => 'FOO', 'bar' => 'FOO'],
+            $this->parser->parse('{ foo: &a "FOO", bar: *a }'),
+        );
     }
 
     private function assertSameData($expected, $actual)

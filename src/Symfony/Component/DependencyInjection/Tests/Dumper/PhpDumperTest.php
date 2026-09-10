@@ -52,6 +52,9 @@ use Symfony\Component\DependencyInjection\Reference;
 use Symfony\Component\DependencyInjection\ServiceLocator;
 use Symfony\Component\DependencyInjection\Tests\Compiler\AAndIInterfaceConsumer;
 use Symfony\Component\DependencyInjection\Tests\Compiler\AInterface;
+use Symfony\Component\DependencyInjection\Tests\Compiler\EInterface;
+use Symfony\Component\DependencyInjection\Tests\Compiler\EnvAutowireWithMissingArgument;
+use Symfony\Component\DependencyInjection\Tests\Compiler\F;
 use Symfony\Component\DependencyInjection\Tests\Compiler\Foo;
 use Symfony\Component\DependencyInjection\Tests\Compiler\FooVoid;
 use Symfony\Component\DependencyInjection\Tests\Compiler\IInterface;
@@ -826,6 +829,20 @@ class PhpDumperTest extends TestCase
         $this->assertGreaterThan(0, $container->getEnvCounters()['FOO']);
     }
 
+    public function testEnvUsedByRemovedAutowiredServiceIsNotReportedAsNeverUsed()
+    {
+        $container = new ContainerBuilder();
+        $container->register('foo', EnvAutowireWithMissingArgument::class)
+            ->setAutowired(true)
+        ;
+        $container->compile();
+
+        $dumper = new PhpDumper($container);
+        $dumper->dump();
+
+        $this->assertGreaterThan(0, $container->getEnvCounters()['SOME_ENV']);
+    }
+
     public function testCircularDynamicEnv()
     {
         $this->expectException(ParameterCircularReferenceException::class);
@@ -973,6 +990,51 @@ class PhpDumperTest extends TestCase
         $this->assertStringEqualsGeneratedFile('services_non_shared_duplicates.php', $dumper->dump());
     }
 
+    public function testNonSharedResettable()
+    {
+        $container = new ContainerBuilder();
+        $container->register('foo', 'stdClass')
+            ->setShared(false)
+            ->setPublic(true)
+            ->addTag('container.tracked_for_reset', ['method' => 'reset']);
+        $container->compile();
+
+        $dumper = new PhpDumper($container);
+
+        $this->assertStringEqualsGeneratedFile('services_non_shared_resettable.php', $dumper->dump());
+    }
+
+    public function testNonSharedResettableMultipleMethods()
+    {
+        $container = new ContainerBuilder();
+        $container->register('foo', 'stdClass')
+            ->setShared(false)
+            ->setPublic(true)
+            ->addTag('container.tracked_for_reset', ['method' => 'reset'])
+            ->addTag('container.tracked_for_reset', ['method' => 'clear']);
+        $container->compile();
+
+        $dumper = new PhpDumper($container);
+
+        $this->assertStringEqualsGeneratedFile('services_non_shared_resettable_multiple.php', $dumper->dump());
+    }
+
+    public function testNonSharedResettableAsArgument()
+    {
+        $container = new ContainerBuilder();
+        $container->register('foo', 'stdClass')
+            ->setShared(false)
+            ->addTag('container.tracked_for_reset', ['method' => 'reset']);
+        $container->register('bar', 'stdClass')
+            ->setPublic(true)
+            ->addArgument(new Reference('foo'));
+        $container->compile();
+
+        $dumper = new PhpDumper($container);
+
+        $this->assertStringEqualsGeneratedFile('services_non_shared_resettable_as_arg.php', $dumper->dump());
+    }
+
     public function testInitializePropertiesBeforeMethodCalls()
     {
         require_once self::$fixturesPath.'/includes/classes.php';
@@ -1027,6 +1089,28 @@ class PhpDumperTest extends TestCase
         $dumper = new PhpDumper($container);
 
         $this->assertStringEqualsGeneratedFile('services_dedup_lazy.php', $dumper->dump());
+    }
+
+    public function testDedupLazyProxyWithDifferentInterfaces()
+    {
+        $container = new ContainerBuilder();
+        $container->register('foo', F::class)
+            ->setLazy(true)
+            ->setPublic(true)
+            ->addTag('proxy', ['interface' => EInterface::class]);
+        $container->register('bar', F::class)
+            ->setLazy(true)
+            ->setPublic(true)
+            ->addTag('proxy', ['interface' => IInterface::class]);
+        $container->compile();
+
+        $dumper = new PhpDumper($container);
+        eval('?>'.$dumper->dump(['class' => 'Symfony_DI_PhpDumper_Service_Dedup_Lazy_Proxy_Interfaces']));
+
+        $container = new \Symfony_DI_PhpDumper_Service_Dedup_Lazy_Proxy_Interfaces();
+
+        $this->assertInstanceOf(EInterface::class, $container->get('foo'));
+        $this->assertInstanceOf(IInterface::class, $container->get('bar'));
     }
 
     public function testLazyArgumentProvideGenerator()
@@ -2053,6 +2137,11 @@ class PhpDumperTest extends TestCase
     public function testAutowireClosure()
     {
         $container = new ContainerBuilder();
+        $container->setParameter('env(FOO)', 'foo');
+        $container->setParameter('env(BAR)', 'foo');
+        $container->setParameter('env(HOST)', 'example.com');
+        $container->setParameter('env(PORT)', '6379');
+        $container->setParameter('dsn_template', 'redis://%env(HOST)%:%env(PORT)%');
         $container->register('foo', Foo::class)
             ->setPublic(true);
         $container->register('my_callable', MyCallable::class)
@@ -2078,10 +2167,18 @@ class PhpDumperTest extends TestCase
         $this->assertInstanceOf(\Closure::class, $bar->foo);
         $this->assertInstanceOf(\Closure::class, $bar->baz);
         $this->assertInstanceOf(\Closure::class, $bar->buz);
+        $this->assertInstanceOf(\Closure::class, $bar->getFoo);
+        $this->assertInstanceOf(\Stringable::class, $bar->getBar);
+        $this->assertInstanceOf(\Stringable::class, $bar->getDsn);
+        $this->assertInstanceOf(\Stringable::class, $bar->getDsnFromParam);
         $this->assertSame($container->get('foo'), ($bar->foo)());
         $this->assertSame($container->get('baz'), $bar->baz);
         $this->assertInstanceOf(Foo::class, $fooClone = ($bar->buz)());
         $this->assertNotSame($container->get('foo'), $fooClone);
+        $this->assertSame('foo', ($bar->getFoo)());
+        $this->assertSame('foo', (string) $bar->getBar);
+        $this->assertSame('redis://example.com:6379', (string) $bar->getDsn);
+        $this->assertSame('redis://example.com:6379', (string) $bar->getDsnFromParam);
     }
 
     public function testLazyClosure()
@@ -2145,6 +2242,32 @@ class PhpDumperTest extends TestCase
         $r = new \ReflectionClass(Foo::class);
         $this->assertTrue($r->isUninitializedLazyObject($container->get('bar')->foo));
         $this->assertSame($container->get('foo'), $r->initializeLazyObject($container->get('bar')->foo));
+    }
+
+    public function testLazyAutowireAttributeOnAlreadyLazyService()
+    {
+        $container = new ContainerBuilder();
+        $container->register('foo', Foo::class)
+            ->setPublic(true)
+            ->setLazy(true);
+        $container->setAlias(Foo::class, 'foo');
+        $container->register('bar', LazyServiceConsumer::class)
+            ->setPublic(true)
+            ->setAutowired(true);
+        $container->compile();
+
+        $dumper = new PhpDumper($container);
+        eval('?>'.$dumper->dump(['class' => 'Symfony_DI_PhpDumper_Test_Lazy_Autowire_Attribute_Already_Lazy']));
+
+        $container = new \Symfony_DI_PhpDumper_Test_Lazy_Autowire_Attribute_Already_Lazy();
+
+        $bar = $container->get('bar');
+        $this->assertInstanceOf(Foo::class, $bar->foo);
+
+        $r = new \ReflectionClass(Foo::class);
+        $this->assertTrue($r->isUninitializedLazyObject($bar->foo));
+        $this->assertSame(0, $bar->foo->foo);
+        $this->assertFalse($r->isUninitializedLazyObject($bar->foo));
     }
 
     public function testLazyAutowireAttributeWithIntersection()
@@ -2431,6 +2554,227 @@ class PhpDumperTest extends TestCase
         $this->assertStringNotContainsString("'container.build_time' => 0", $dump);
     }
 
+    public function testDumpedContainerEvictsSharedServiceOnMethodCallFailure()
+    {
+        PhpDumperTest_FailingSetup::$attempts = 0;
+        $container = new ContainerBuilder();
+        $container->register('foo', PhpDumperTest_FailingSetup::class)->setPublic(true)->addMethodCall('fail');
+        $container->compile();
+
+        $dumper = new PhpDumper($container);
+        eval('?>'.$dumper->dump(['class' => $class = 'Symfony_DI_PhpDumper_Test_Evict_Method_Call']));
+
+        $dumpedContainer = new $class();
+
+        $first = null;
+        try {
+            $dumpedContainer->get('foo');
+        } catch (\RuntimeException $first) {
+        }
+        $this->assertSame('Setup failed.', $first?->getMessage(), '->get() should throw when a method call fails');
+
+        $this->assertFalse($dumpedContainer->initialized('foo'));
+
+        $second = null;
+        try {
+            $dumpedContainer->get('foo');
+        } catch (\RuntimeException $second) {
+        }
+        $this->assertSame('Setup failed.', $second?->getMessage(), '->get() should throw again instead of returning a partially-configured service');
+
+        $this->assertSame(2, PhpDumperTest_FailingSetup::$attempts);
+    }
+
+    public function testDumpedContainerEvictsSharedServiceOnPropertyTypeError()
+    {
+        $container = new ContainerBuilder();
+        $container->register('foo', PhpDumperTest_FailingSetup::class)->setPublic(true)->setProperty('count', 'not-a-number');
+        $container->compile();
+
+        $dumper = new PhpDumper($container);
+        eval('?>'.$dumper->dump(['class' => $class = 'Symfony_DI_PhpDumper_Test_Evict_Property_Type_Error']));
+
+        $dumpedContainer = new $class();
+
+        $first = null;
+        try {
+            $dumpedContainer->get('foo');
+        } catch (\TypeError $first) {
+        }
+        $this->assertNotNull($first, '->get() should throw when injecting a property fails');
+
+        $second = null;
+        try {
+            $dumpedContainer->get('foo');
+        } catch (\TypeError $second) {
+        }
+        $this->assertNotNull($second, '->get() should throw again instead of returning a partially-configured service');
+    }
+
+    public function testDumpedContainerEvictsSharedServiceOnConfiguratorFailure()
+    {
+        PhpDumperTest_FailingSetup::$attempts = 0;
+        $container = new ContainerBuilder();
+        $container->register('foo', 'stdClass')->setPublic(true)->setConfigurator([PhpDumperTest_FailingSetup::class, 'failToConfigure']);
+        $container->compile();
+
+        $dumper = new PhpDumper($container);
+        eval('?>'.$dumper->dump(['class' => $class = 'Symfony_DI_PhpDumper_Test_Evict_Configurator']));
+
+        $dumpedContainer = new $class();
+
+        $first = null;
+        try {
+            $dumpedContainer->get('foo');
+        } catch (\RuntimeException $first) {
+        }
+        $this->assertSame('Configuration failed.', $first?->getMessage(), '->get() should throw when the configurator fails');
+
+        $second = null;
+        try {
+            $dumpedContainer->get('foo');
+        } catch (\RuntimeException $second) {
+        }
+        $this->assertSame('Configuration failed.', $second?->getMessage(), '->get() should throw again instead of returning a partially-configured service');
+
+        $this->assertSame(2, PhpDumperTest_FailingSetup::$attempts);
+    }
+
+    public function testDumpedContainerEvictsPrivateSharedServiceOnFailure()
+    {
+        PhpDumperTest_FailingSetup::$attempts = 0;
+        $container = new ContainerBuilder();
+        $container->register('failer', PhpDumperTest_FailingSetup::class)->addMethodCall('fail');
+        $container->register('consumer1', 'stdClass')->setPublic(true)->setProperty('failer', new Reference('failer'));
+        $container->register('consumer2', 'stdClass')->setPublic(true)->setProperty('failer', new Reference('failer'));
+        $container->compile();
+
+        $dumper = new PhpDumper($container);
+        eval('?>'.$dumper->dump(['class' => $class = 'Symfony_DI_PhpDumper_Test_Evict_Private']));
+
+        $dumpedContainer = new $class();
+
+        $first = null;
+        try {
+            $dumpedContainer->get('consumer1');
+        } catch (\RuntimeException $first) {
+        }
+        $this->assertSame('Setup failed.', $first?->getMessage(), '->get() should throw when building a private dependency fails');
+
+        $second = null;
+        try {
+            $dumpedContainer->get('consumer1');
+        } catch (\RuntimeException $second) {
+        }
+        $this->assertSame('Setup failed.', $second?->getMessage(), '->get() should throw again instead of returning a partially-configured service');
+
+        $this->assertSame(2, PhpDumperTest_FailingSetup::$attempts);
+    }
+
+    public function testDumpedContainerEvictsCircularServicesOnFailure()
+    {
+        PhpDumperTest_FailsOnceConfigurator::$calls = 0;
+        $container = new ContainerBuilder();
+        $container->register('a', PhpDumperTest_CircularSetterA::class)->setPublic(true)->addMethodCall('setB', [new Reference('b')]);
+        $container->register('b', PhpDumperTest_CircularSetterB::class)->setPublic(true)->addMethodCall('setA', [new Reference('a')])->setConfigurator([PhpDumperTest_FailsOnceConfigurator::class, 'configure']);
+        $container->compile();
+
+        $dumper = new PhpDumper($container);
+        $dumper->setProxyDumper(new NullDumper());
+        eval('?>'.$dumper->dump(['class' => $class = 'Symfony_DI_PhpDumper_Test_Evict_Circular']));
+
+        $dumpedContainer = new $class();
+
+        $first = null;
+        try {
+            $dumpedContainer->get('a');
+        } catch (\RuntimeException $first) {
+        }
+        $this->assertSame('First attempt fails.', $first?->getMessage(), '->get() should throw when configuring a service of the circular graph fails');
+
+        $this->assertFalse($dumpedContainer->initialized('a'));
+        $this->assertFalse($dumpedContainer->initialized('b'));
+
+        $a = $dumpedContainer->get('a');
+
+        $this->assertInstanceOf(PhpDumperTest_CircularSetterB::class, $a->b);
+        $this->assertSame($a, $a->b->a);
+    }
+
+    public function testDumpedContainerEvictsWitherServiceOnSetupFailure()
+    {
+        $container = new ContainerBuilder();
+        $container->register('wither', PhpDumperTest_WitherFailingSetup::class)
+            ->setPublic(true)
+            ->addMethodCall('withNothing', [], true)
+            ->addMethodCall('fail');
+        $container->compile();
+
+        $dumper = new PhpDumper($container);
+        eval('?>'.$dumper->dump(['class' => $class = 'Symfony_DI_PhpDumper_Test_Evict_Wither']));
+
+        $dumpedContainer = new $class();
+
+        $first = null;
+        try {
+            $dumpedContainer->get('wither');
+        } catch (\RuntimeException $first) {
+        }
+        $this->assertSame('Setup failed.', $first?->getMessage(), '->get() should throw when a method call fails after the last wither');
+
+        $this->assertFalse($dumpedContainer->initialized('wither'));
+
+        $second = null;
+        try {
+            $dumpedContainer->get('wither');
+        } catch (\RuntimeException $second) {
+        }
+        $this->assertSame('Setup failed.', $second?->getMessage(), '->get() should throw again instead of returning a partially-configured service');
+    }
+
+    public function testDumpedContainerSharesBeforeSetupOnExpressionSelfReference()
+    {
+        $container = new ContainerBuilder();
+        $container->register('configuration', PhpDumperTest_ExpressionSelfReference::class)
+            ->setPublic(true)
+            ->addMethodCall('setStrategy', [new Reference('strategy')]);
+        $container->register('strategy', PhpDumperTest_ExpressionSelfReferenceStrategy::class)
+            ->addArgument(new Reference('locator'));
+        $container->register('locator', PhpDumperTest_ExpressionSelfReferenceLocator::class)
+            ->addArgument(new Expression('service("configuration").getDirectory()'));
+        $container->compile();
+
+        $dumper = new PhpDumper($container);
+        $dump = $dumper->dump(['class' => $class = 'Symfony_DI_PhpDumper_Test_Expression_Self_Reference']);
+
+        // the expression dumps to a container lookup rather than to the local $instance,
+        // so the service has to be shared before its setup runs
+        $sharePosition = strpos($dump, '$container->services[\'configuration\'] = $instance;');
+        $setupPosition = strpos($dump, '$instance->setStrategy(');
+
+        $this->assertNotFalse($sharePosition);
+        $this->assertNotFalse($setupPosition);
+        $this->assertLessThan($setupPosition, $sharePosition);
+
+        eval('?>'.$dump);
+
+        $configuration = (new $class())->get('configuration');
+
+        $this->assertInstanceOf(PhpDumperTest_ExpressionSelfReferenceStrategy::class, $configuration->strategy);
+    }
+
+    public function testConstructorExpressionSelfReferenceRemainsCircular()
+    {
+        $container = new ContainerBuilder();
+        $container->register('configuration', PhpDumperTest_ExpressionSelfReference::class)
+            ->setPublic(true)
+            ->addArgument(new Expression('service("configuration").getDirectory()'));
+
+        $this->expectException(ServiceCircularReferenceException::class);
+
+        $container->compile();
+    }
+
     private static function assertStringEqualsGeneratedFile(string $expectedFile, string $dumpedCode): void
     {
         $expectedFile = self::$fixturesPath.'/php/'.$expectedFile;
@@ -2479,6 +2823,14 @@ class LazyClosureConsumer
         public \Closure $buz,
         #[AutowireCallable(service: 'my_callable')]
         public \Closure $bar,
+        #[Autowire(env: 'FOO')]
+        public string|\Closure|null $getFoo = null,
+        #[Autowire(env: 'BAR')]
+        public string|\Stringable $getBar = 'bar',
+        #[Autowire('redis://%env(HOST)%:%env(PORT)%')]
+        public ?\Stringable $getDsn = null,
+        #[Autowire('%dsn_template%')]
+        public ?\Stringable $getDsnFromParam = null,
     ) {
     }
 }
@@ -2607,5 +2959,99 @@ class InlineAdapterConsumer
         #[AutowireInline(MyInlineService::class, calls: [['someMethod1', ['%someParam%']], ['someMethod2', []]])]
         public MyInlineService $inlinedWithCallsWithParamArgument,
     ) {
+    }
+}
+
+class PhpDumperTest_FailingSetup
+{
+    public static int $attempts = 0;
+    public int $count = 0;
+
+    public function fail(): void
+    {
+        ++self::$attempts;
+
+        throw new \RuntimeException('Setup failed.');
+    }
+
+    public static function failToConfigure(object $service): void
+    {
+        ++self::$attempts;
+
+        throw new \RuntimeException('Configuration failed.');
+    }
+}
+
+class PhpDumperTest_WitherFailingSetup
+{
+    public function withNothing(): static
+    {
+        return clone $this;
+    }
+
+    public function fail(): void
+    {
+        throw new \RuntimeException('Setup failed.');
+    }
+}
+
+class PhpDumperTest_CircularSetterA
+{
+    public ?object $b = null;
+
+    public function setB(object $b): void
+    {
+        $this->b = $b;
+    }
+}
+
+class PhpDumperTest_CircularSetterB
+{
+    public ?object $a = null;
+
+    public function setA(object $a): void
+    {
+        $this->a = $a;
+    }
+}
+
+class PhpDumperTest_FailsOnceConfigurator
+{
+    public static int $calls = 0;
+
+    public static function configure(object $service): void
+    {
+        if (1 === ++self::$calls) {
+            throw new \RuntimeException('First attempt fails.');
+        }
+    }
+}
+
+class PhpDumperTest_ExpressionSelfReference
+{
+    public $strategy;
+
+    public function setStrategy(PhpDumperTest_ExpressionSelfReferenceStrategy $strategy): void
+    {
+        $this->strategy = $strategy;
+    }
+
+    public function getDirectory(): string
+    {
+        return '/tmp/proxies';
+    }
+}
+
+class PhpDumperTest_ExpressionSelfReferenceStrategy
+{
+    public function __construct(public PhpDumperTest_ExpressionSelfReferenceLocator $locator)
+    {
+    }
+}
+
+class PhpDumperTest_ExpressionSelfReferenceLocator
+{
+    public function __construct(public string $directory)
+    {
     }
 }

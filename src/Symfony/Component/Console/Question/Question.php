@@ -26,7 +26,7 @@ class Question
     private bool $hidden = false;
     private bool $hiddenFallback = true;
     /**
-     * @var (\Closure(string):string[])|null
+     * @var (\Closure(string):list<string>)|null
      */
     private ?\Closure $autocompleterCallback = null;
     /**
@@ -47,7 +47,8 @@ class Question
 
     /**
      * @param string                     $question The question to ask to the user
-     * @param string|bool|int|float|null $default  The default answer to return if the user enters nothing
+     * @param string|bool|int|float|null $default  The default answer to return if the user enters nothing.
+     *                                             Object defaults set on InputArgument/InputOption are not propagated here.
      */
     public function __construct(
         private string $question,
@@ -197,7 +198,7 @@ class Question
     /**
      * Gets the callback function used for the autocompleter.
      *
-     * @return (callable(string):string[])|null
+     * @return (callable(string):list<string>)|null
      */
     public function getAutocompleterCallback(): ?callable
     {
@@ -207,9 +208,9 @@ class Question
     /**
      * Sets the callback function used for the autocompleter.
      *
-     * The callback is passed the user input as argument and should return an iterable of corresponding suggestions.
+     * The callback is passed the user input as argument and must return a list of corresponding suggestions.
      *
-     * @param (callable(string):string[])|null $callback
+     * @param (callable(string):list<string>)|null $callback
      *
      * @return $this
      */

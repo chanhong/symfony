@@ -11,7 +11,7 @@
 
 namespace Symfony\Component\Messenger\Bridge\AmazonSqs\Transport;
 
-use AsyncAws\Core\Exception\Http\HttpException;
+use AsyncAws\Core\Exception\Exception as AsyncAwsException;
 use Symfony\Component\Messenger\Envelope;
 use Symfony\Component\Messenger\Exception\TransportException;
 use Symfony\Component\Messenger\Stamp\DelayStamp;
@@ -36,7 +36,7 @@ class AmazonSqsSender implements SenderInterface
 
         /** @var DelayStamp|null $delayStamp */
         $delayStamp = $envelope->last(DelayStamp::class);
-        $delay = null !== $delayStamp ? (int) ceil($delayStamp->getDelay() / 1000) : 0;
+        $delay = null !== $delayStamp ? (int) ceil($delayStamp->getDelay() / 1000) : null;
 
         $messageGroupId = null;
         $messageDeduplicationId = null;
@@ -61,7 +61,7 @@ class AmazonSqsSender implements SenderInterface
                 $messageDeduplicationId,
                 $xrayTraceId
             );
-        } catch (HttpException $e) {
+        } catch (AsyncAwsException $e) {
             throw new TransportException($e->getMessage(), 0, $e);
         }
 

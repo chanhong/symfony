@@ -12,6 +12,8 @@
 namespace Symfony\Component\HttpFoundation\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\IgnoreDeprecations;
 use PHPUnit\Framework\Attributes\RequiresPhpExtension;
 use PHPUnit\Framework\Attributes\TestWith;
 use PHPUnit\Framework\TestCase;
@@ -19,8 +21,13 @@ use Symfony\Component\HttpFoundation\Exception\BadRequestException;
 use Symfony\Component\HttpFoundation\Exception\ConflictingHeadersException;
 use Symfony\Component\HttpFoundation\Exception\JsonException;
 use Symfony\Component\HttpFoundation\Exception\SuspiciousOperationException;
+use Symfony\Component\HttpFoundation\FileBag;
+use Symfony\Component\HttpFoundation\HeaderBag;
+use Symfony\Component\HttpFoundation\InputBag;
 use Symfony\Component\HttpFoundation\IpUtils;
+use Symfony\Component\HttpFoundation\ParameterBag;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\ServerBag;
 use Symfony\Component\HttpFoundation\Session\Session;
 use Symfony\Component\HttpFoundation\Session\Storage\MockArraySessionStorage;
 
@@ -2241,6 +2248,105 @@ b'])]
         $this->assertSame('localhost', $request->getHost());
     }
 
+    public function testSetTrustedHostsKeepsPatternsIndependent()
+    {
+        Request::setTrustedHosts(['^(a)\.example\.com$', '^(b)\.\1\.example\.com$']);
+
+        $request = Request::create('/');
+        $request->headers->set('host', 'b.b.example.com');
+        $this->assertSame('b.b.example.com', $request->getHost());
+    }
+
+    public function testTrustedHostsAreNotAccumulated()
+    {
+        Request::setTrustedHosts(['^[a-z]+\.example\.com$']);
+
+        $request = Request::create('/');
+        $request->headers->set('host', 'a.example.com');
+        $this->assertSame('a.example.com', $request->getHost());
+        $request->headers->set('host', 'b.example.com');
+        $this->assertSame('b.example.com', $request->getHost());
+
+        $this->assertSame([], (new \ReflectionProperty(Request::class, 'trustedHosts'))->getValue());
+    }
+
+    public function testTrustedHostsAreNotMatchedLoosely()
+    {
+        Request::setTrustedHosts(['^123$']);
+
+        $request = Request::create('/');
+        $request->headers->set('host', '123');
+        $this->assertSame('123', $request->getHost());
+
+        $request = Request::create('/');
+        $request->headers->set('host', '0123');
+
+        $this->expectException(SuspiciousOperationException::class);
+        $this->expectExceptionMessage('Untrusted Host "0123".');
+
+        $request->getHost();
+    }
+
+    public function testTrustedHostsWithManyPatterns()
+    {
+        $hostPatterns = [];
+        for ($i = 0; $i < 5000; ++$i) {
+            $hostPatterns[] = '^customer-'.$i.'\.[a-z]+\.example\.com$';
+        }
+        Request::setTrustedHosts($hostPatterns);
+
+        $request = Request::create('/');
+        $request->headers->set('host', 'customer-0.eu.example.com');
+        $this->assertSame('customer-0.eu.example.com', $request->getHost());
+        $request->headers->set('host', 'customer-4999.eu.example.com');
+        $this->assertSame('customer-4999.eu.example.com', $request->getHost());
+
+        $request = Request::create('/');
+        $request->headers->set('host', 'evil.com');
+
+        $this->expectException(SuspiciousOperationException::class);
+        $this->expectExceptionMessage('Untrusted Host "evil.com".');
+
+        $request->getHost();
+    }
+
+    public function testTrustedHostsWithManyConstantPatterns()
+    {
+        $hostPatterns = [];
+        for ($i = 0; $i < 5000; ++$i) {
+            $hostPatterns[] = '^customer-'.$i.'\.example\.com$';
+        }
+        Request::setTrustedHosts($hostPatterns);
+
+        $trustedHostsRegexps = new \ReflectionProperty(Request::class, 'trustedHostsRegexps');
+        $this->assertSame([], $trustedHostsRegexps->getValue());
+
+        $request = Request::create('/');
+        $request->headers->set('host', 'customer-0.example.com');
+        $this->assertSame('customer-0.example.com', $request->getHost());
+        $request->headers->set('host', 'CUSTOMER-4999.EXAMPLE.COM');
+        $this->assertSame('customer-4999.example.com', $request->getHost());
+
+        $request = Request::create('/');
+        $request->headers->set('host', 'evil.com');
+
+        $this->expectException(SuspiciousOperationException::class);
+        $this->expectExceptionMessage('Untrusted Host "evil.com".');
+
+        $request->getHost();
+    }
+
+    public function testTrustedHostsWithMetaCharactersAreMatchedAsRegexps()
+    {
+        Request::setTrustedHosts(['^a.example\.com$', '^customer-\d+\.example\.org$']);
+
+        $request = Request::create('/');
+        $request->headers->set('host', 'axexample.com');
+        $this->assertSame('axexample.com', $request->getHost());
+        $request->headers->set('host', 'customer-42.example.org');
+        $this->assertSame('customer-42.example.org', $request->getHost());
+    }
+
     public function testFactory()
     {
         Request::setFactory(static fn (array $query = [], array $request = [], array $attributes = [], array $cookies = [], array $files = [], array $server = [], $content = null) => new NewRequest());
@@ -2998,6 +3104,43 @@ b'])]
             'atom',
             'html',
         ];
+    }
+
+    /**
+     * @return iterable<string, array{0: string, 1: object, 2: string}>
+     */
+    public static function provideDirectPropertyWrites(): iterable
+    {
+        yield 'attributes' => ['attributes', new ParameterBag(['k' => 'v']), 'pass attributes as a constructor argument or call "initialize()" instead.'];
+        yield 'request' => ['request', new InputBag(['k' => 'v']), 'pass the POST data as a constructor argument or call "initialize()" instead.'];
+        yield 'query' => ['query', new InputBag(['k' => 'v']), 'pass query parameters as a constructor argument or call "initialize()" instead.'];
+        yield 'server' => ['server', new ServerBag(['k' => 'v']), 'pass server parameters as a constructor argument or call "initialize()" instead.'];
+        yield 'files' => ['files', new FileBag(), 'pass files as a constructor argument or call "initialize()" instead.'];
+        yield 'cookies' => ['cookies', new InputBag(['k' => 'v']), 'pass cookies as a constructor argument or call "initialize()" instead.'];
+        yield 'headers' => ['headers', new HeaderBag(['k' => 'v']), 'pass header parameters as a constructor argument or call "initialize()" instead.'];
+    }
+
+    #[Group('legacy')]
+    #[IgnoreDeprecations]
+    #[DataProvider('provideDirectPropertyWrites')]
+    public function testDirectPropertyWriteIsDeprecated(string $property, object $value, string $extra)
+    {
+        $request = new Request();
+
+        $this->expectUserDeprecationMessage(\sprintf('Since symfony/http-foundation 8.1: Directly setting property "%s" of "Symfony\Component\HttpFoundation\Request" is deprecated; %s', $property, $extra));
+
+        $request->{$property} = $value;
+    }
+
+    #[Group('legacy')]
+    #[IgnoreDeprecations]
+    public function testDirectPropertyWriteFromSubclassReportsSubclass()
+    {
+        $request = new NewRequest();
+
+        $this->expectUserDeprecationMessage('Since symfony/http-foundation 8.1: Directly setting property "query" of "Symfony\Component\HttpFoundation\Tests\NewRequest" is deprecated; pass query parameters as a constructor argument or call "initialize()" instead.');
+
+        $request->query = new InputBag(['k' => 'v']);
     }
 }
 

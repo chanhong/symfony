@@ -13,6 +13,7 @@ namespace Symfony\Component\Scheduler\Generator;
 
 use Psr\Clock\ClockInterface;
 use Symfony\Component\Clock\Clock;
+use Symfony\Component\Scheduler\Exception\LogicException;
 use Symfony\Component\Scheduler\RecurringMessage;
 use Symfony\Component\Scheduler\Schedule;
 use Symfony\Component\Scheduler\ScheduleProviderInterface;
@@ -22,6 +23,7 @@ final class MessageGenerator implements MessageGeneratorInterface
 {
     private ?Schedule $schedule = null;
     private TriggerHeap $triggerHeap;
+    private bool $heapInitialized = false;
     private ?\DateTimeImmutable $waitUntil;
 
     public function __construct(
@@ -56,7 +58,7 @@ final class MessageGenerator implements MessageGeneratorInterface
         $startTime = $checkpoint->from();
         $lastTime = $checkpoint->time();
         $lastIndex = $checkpoint->index();
-        $heap = $this->heap($lastTime, $startTime);
+        $heap = $this->heap($lastTime, $startTime, $lastIndex);
 
         while (!$heap->isEmpty() && $heap->top()[0] <= $now) {
             /** @var \DateTimeImmutable $time */
@@ -74,15 +76,21 @@ final class MessageGenerator implements MessageGeneratorInterface
                 $yield = false;
             }
 
+            $previousTime = $time;
             $nextTime = $trigger->getNextRunDate($time);
 
             if ($this->schedule->shouldProcessOnlyLastMissedRun()) {
-                while ($nextTime && $nextTime < $this->clock->now()) {
+                while ($nextTime && $nextTime > $previousTime && $nextTime < $this->clock->now()) {
+                    $previousTime = $nextTime;
                     $nextTime = $trigger->getNextRunDate($nextTime);
                 }
             }
 
             if ($nextTime) {
+                if ($nextTime <= $previousTime) {
+                    throw new LogicException(\sprintf('The "%s" trigger does not move the run date forward. Its "getNextRunDate()" method must return a date strictly after the given one.', $trigger));
+                }
+
                 $heap->insert([$nextTime, $index, $recurringMessage]);
             }
 
@@ -108,13 +116,24 @@ final class MessageGenerator implements MessageGeneratorInterface
         return $this->schedule ??= $this->scheduleProvider->getSchedule();
     }
 
-    private function heap(\DateTimeImmutable $time, \DateTimeImmutable $startTime): TriggerHeap
+    private function heap(\DateTimeImmutable $time, \DateTimeImmutable $startTime, int $lastIndex): TriggerHeap
     {
         if (isset($this->triggerHeap) && $this->triggerHeap->time <= $time) {
             return $this->triggerHeap;
         }
 
         $heap = new TriggerHeap($time);
+
+        // On the very first heap build of this instance — a new process picking up a
+        // checkpoint that already yielded part of the messages due at $time (lastIndex
+        // >= 0) — probe one microsecond before $time so triggers, whose getNextRunDate()
+        // is strictly-after, re-emit entries due at exactly $time. The skip logic in
+        // getMessages() then filters out already-yielded indices, letting the
+        // un-processed remainder through. Subsequent rebuilds happen after a normal
+        // yield-then-advance cycle (not after a partial yield), so re-probing $time
+        // would re-emit entries that are already advanced past.
+        $probeTime = !$this->heapInitialized && $lastIndex >= 0 ? $time->modify('-1 microsecond') : $time;
+        $this->heapInitialized = true;
 
         foreach ($this->getSchedule()->getRecurringMessages() as $index => $recurringMessage) {
             $trigger = $recurringMessage->getTrigger();
@@ -123,7 +142,7 @@ final class MessageGenerator implements MessageGeneratorInterface
                 $trigger->continue($startTime);
             }
 
-            if (!$nextTime = $trigger->getNextRunDate($time)) {
+            if (!$nextTime = $trigger->getNextRunDate($probeTime)) {
                 continue;
             }
 

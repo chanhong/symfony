@@ -31,7 +31,7 @@ use Symfony\Component\Config\Loader\ParamConfigurator as Param;
  * @psalm-type ImportsConfig = list<string|array{
  *     resource: string,
  *     type?: string|null,
- *     ignore_errors?: bool,
+ *     ignore_errors?: bool|'not_found',
  * }>
  * @psalm-type ParametersConfig = array<string, scalar|\UnitEnum|array<scalar|\UnitEnum|array<mixed>|Param|null>|Param|null>
  * @psalm-type ArgumentsType = list<mixed>|array<string, mixed>
@@ -51,7 +51,7 @@ use Symfony\Component\Config\Loader\ParamConfigurator as Param;
  *     shared?: bool,
  *     lazy?: bool|string,
  *     public?: bool,
- *     properties?: array<string, mixed>,
+ *%A   properties?: array<string, mixed>,
  *     configurator?: CallbackType,
  *     calls?: list<CallType>,
  *     tags?: TagsType,
@@ -121,7 +121,7 @@ use Symfony\Component\Config\Loader\ParamConfigurator as Param;
  * %A}
  * @psalm-type ServicesConfig = array{
  *     _defaults?: DefaultsType,
- *     _instanceof?: InstanceofType,
+ *     _instanceof?: %SInstanceofType%S,
  *     ...<string, DefinitionType|AliasType|PrototypeType|StackType|ArgumentsType|null>
  * }
  * @psalm-type ExtensionType = array<string, mixed>
@@ -135,8 +135,8 @@ use Symfony\Component\Config\Loader\ParamConfigurator as Param;
  * }
  * @psalm-type AppConfig = bool|Param
  * @psalm-type PrototypedConfigConfig = array<string, array{ // Default: []
- *         value?: scalar|Param|null,
- *     }>
+ * %w    value?: scalar|Param|null,
+ * %w}>
  * @psalm-type ConfigType = array{
  *     imports?: ImportsConfig,
  *     parameters?: ParametersConfig,
@@ -218,7 +218,7 @@ namespace Symfony\Component\Routing\Loader\Configurator;
  *     format?: string,
  *     utf8?: bool,
  *     stateless?: bool,
- * }
+ * %A}
  * @psalm-type ImportConfig = array{
  *     resource: string,
  *     type?: string,
@@ -238,7 +238,7 @@ namespace Symfony\Component\Routing\Loader\Configurator;
  *     format?: string,
  *     utf8?: bool,
  *     stateless?: bool,
- * }
+ * %A}
  * @psalm-type AliasConfig = array{
  *     alias: string,
  *     deprecated?: array{package:string, version:string, message?:string},

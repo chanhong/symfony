@@ -4,6 +4,7 @@ CHANGELOG
 8.1
 ---
 
+ * Add `framework.validation.property_metadata_existence_check` config option
  * Deprecate `json_streamer.value_transformer.date_time_to_string` and `json_streamer.value_transformer.string_to_date_time` services, date times are handled as value objects
  * Deprecate `json_streamer.value_transformer` tag, use `json_streamer.property_value_transformer` instead
  * Add `marshaller` option to cache pool configuration to allow per-pool marshaller services
@@ -17,6 +18,7 @@ CHANGELOG
  * Enable mocking non-shared services in tests
  * Add support for setting `mock_response_factory` per scoped HTTP client
  * Add `ConsoleCommandAssertionsTrait` to `KernelTestCase` for running a command and asserting the result
+ * Add `assertSessionHasFlashMessage()` to `BrowserKitAssertionsTrait`
  * Add `framework.html_sanitizer.sanitizers.*.default_action` config option
  * Deprecate parameters `router.request_context.scheme` and `router.request_context.host`;
    use the `router.request_context.base_url` parameter or the `framework.router.default_uri` config option instead
@@ -27,6 +29,9 @@ CHANGELOG
  * Deprecate `senders` nesting level for messenger routing config; use string or a list of strings instead
  * Allow configuring Webhook's header names and signing algo
  * Deprecate registering console commands by overriding `Bundle::registerCommands()`, use the `#[AsCommand]` attribute or the `console.command` service tag instead
+ * Deprecate calling `FrameworkExtension::load()` directly without first loading `ServicesBundle`'s extension
+ * Add support for the `#[RateLimit]` attribute on controllers when `framework.rate_limiter` is configured
+ * Add `--sort` option to `debug:router` command to sort routes by a given column
 
 8.0
 ---

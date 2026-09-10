@@ -236,7 +236,7 @@ class HttpUtilsTest extends TestCase
 
         $this->assertSame(
             'http://localhost/foo/',
-            (new HttpUtils())->createRequest(Request::create('/', server: ['HTTP_X_FORWARDED_PREFIX' => '/foo']), '/')->getUri(),
+            (new HttpUtils())->createRequest(Request::create('/', 'GET', [], [], [], ['HTTP_X_FORWARDED_PREFIX' => '/foo']), '/')->getUri(),
         );
     }
 
@@ -244,7 +244,7 @@ class HttpUtilsTest extends TestCase
     {
         Request::setTrustedProxies(['127.0.0.1'], Request::HEADER_X_FORWARDED_PREFIX);
 
-        $request = Request::create('/', server: ['HTTP_X_FORWARDED_PREFIX' => '/foo']);
+        $request = Request::create('/', 'GET', [], [], [], ['HTTP_X_FORWARDED_PREFIX' => '/foo']);
 
         $urlGenerator = new UrlGenerator(
             $routeCollection = new RouteCollection(),
@@ -256,6 +256,66 @@ class HttpUtilsTest extends TestCase
             'http://localhost/foo/',
             (new HttpUtils($urlGenerator))->createRequest($request, 'root')->getUri(),
         );
+    }
+
+    public function testCreateRequestFromRoutePreservesScriptNameBaseUrl()
+    {
+        // Sub-directory install (Apache "Alias /myapp /var/www/myapp/public" + mod_rewrite).
+        // The master request's base URL comes from SCRIPT_NAME, NOT from X-Forwarded-Prefix.
+        // The sub-request created for a `form_login.use_forward` login MUST inherit that base
+        // URL so the URL generator (re-initialized from the sub-request via
+        // RouterListener::onKernelRequest) emits form action URLs prefixed with `/myapp`.
+        $server = [
+            'REQUEST_URI' => '/myapp/',
+            'SCRIPT_NAME' => '/myapp/index.php',
+            'PHP_SELF' => '/myapp/index.php',
+            'SCRIPT_FILENAME' => '/var/www/myapp/public/index.php',
+        ];
+        $request = new Request([], [], [], [], [], $server);
+        $this->assertSame('/myapp', $request->getBaseUrl());
+
+        $urlGenerator = new UrlGenerator(
+            $routeCollection = new RouteCollection(),
+            (new RequestContext())->fromRequest($request),
+        );
+        $routeCollection->add('app_login', new Route('/login'));
+
+        $subRequest = (new HttpUtils($urlGenerator))->createRequest($request, 'app_login');
+
+        $this->assertSame('/myapp', $subRequest->getBaseUrl());
+        $this->assertSame('http://localhost/myapp/login', $subRequest->getUri());
+    }
+
+    public function testCreateRequestFromRouteBehindProxyPreservesScriptNameBaseUrl()
+    {
+        // Sub-directory install (Apache "Alias /myapp …") behind a trusted proxy adding
+        // an extra prefix: getBaseUrl() === "/proxy-prefix" + "/myapp". Only the
+        // "/proxy-prefix" part may be dropped from the generated sub-request URI; the
+        // "/myapp" part stays so the sub-request re-detects it from SCRIPT_NAME, and the
+        // proxy prefix is re-added (not doubled) once the sub-request is processed.
+        Request::setTrustedProxies(['127.0.0.1'], Request::HEADER_X_FORWARDED_PREFIX);
+
+        $server = [
+            'REQUEST_URI' => '/myapp/',
+            'SCRIPT_NAME' => '/myapp/index.php',
+            'PHP_SELF' => '/myapp/index.php',
+            'SCRIPT_FILENAME' => '/var/www/myapp/public/index.php',
+            'REMOTE_ADDR' => '127.0.0.1',
+            'HTTP_X_FORWARDED_PREFIX' => '/proxy-prefix',
+        ];
+        $request = new Request([], [], [], [], [], $server);
+        $this->assertSame('/proxy-prefix/myapp', $request->getBaseUrl());
+
+        $urlGenerator = new UrlGenerator(
+            $routeCollection = new RouteCollection(),
+            (new RequestContext())->fromRequest($request),
+        );
+        $routeCollection->add('app_login', new Route('/login'));
+
+        $subRequest = (new HttpUtils($urlGenerator))->createRequest($request, 'app_login');
+
+        $this->assertSame('/proxy-prefix/myapp', $subRequest->getBaseUrl());
+        $this->assertSame('http://localhost/proxy-prefix/myapp/login', $subRequest->getUri());
     }
 
     public function testCheckRequestPath()
@@ -358,6 +418,76 @@ class HttpUtilsTest extends TestCase
         $utils = new HttpUtils(null, $urlMatcher);
         $this->assertTrue($utils->checkRequestPath($request, 'route_name'));
         $this->assertFalse($utils->checkRequestPath($request, 'foobar'));
+    }
+
+    public function testCheckRequestPathWithRouteAlias()
+    {
+        $request = $this->getRequest('/foo/bar');
+        $request->attributes->set('_route', 'foobar');
+
+        $routes = new RouteCollection();
+        $routes->add('foobar', new Route('/foo/bar'));
+        $routes->add('other', new Route('/other'));
+        $routes->addAlias('App\Controller\FooBarController', 'foobar');
+
+        $utils = new HttpUtils(new UrlGenerator($routes, (new RequestContext())->fromRequest($request)));
+
+        $this->assertTrue($utils->checkRequestPath($request, 'App\Controller\FooBarController'));
+        $this->assertFalse($utils->checkRequestPath($request, 'other'));
+        $this->assertFalse($utils->checkRequestPath($request, 'undefined'));
+    }
+
+    public function testCheckRequestPathWithRouteAliasAndUrlMatcher()
+    {
+        $request = $this->getRequest('/foo/bar');
+
+        $routes = new RouteCollection();
+        $routes->add('foobar', new Route('/foo/bar'));
+        $routes->addAlias('App\Controller\FooBarController', 'foobar');
+
+        $urlMatcher = $this->createStub(RequestMatcherInterface::class);
+        $urlMatcher
+            ->method('matchRequest')
+            ->willReturn(['_route' => 'foobar'])
+        ;
+
+        $utils = new HttpUtils(new UrlGenerator($routes, (new RequestContext())->fromRequest($request)), $urlMatcher);
+
+        $this->assertTrue($utils->checkRequestPath($request, 'App\Controller\FooBarController'));
+    }
+
+    public function testCheckRequestPathWithRouteAliasAndParameters()
+    {
+        $request = $this->getRequest('/foo/bar');
+        $request->attributes->set('_route', 'foobar');
+        $request->attributes->set('_route_params', ['name' => 'bar']);
+
+        $routes = new RouteCollection();
+        $routes->add('foobar', new Route('/foo/{name}'));
+        $routes->addAlias('App\Controller\FooBarController', 'foobar');
+
+        $utils = new HttpUtils(new UrlGenerator($routes, (new RequestContext())->fromRequest($request)));
+
+        $this->assertTrue($utils->checkRequestPath($request, 'App\Controller\FooBarController'));
+    }
+
+    public function testCheckRequestPathWithRouteAliasAndParametersAndUrlMatcher()
+    {
+        $request = $this->getRequest('/foo/bar');
+
+        $routes = new RouteCollection();
+        $routes->add('foobar', new Route('/foo/{name}'));
+        $routes->addAlias('App\Controller\FooBarController', 'foobar');
+
+        $urlMatcher = $this->createStub(RequestMatcherInterface::class);
+        $urlMatcher
+            ->method('matchRequest')
+            ->willReturn(['_route' => 'foobar', '_controller' => 'App\Controller\FooBarController::index', 'name' => 'bar'])
+        ;
+
+        $utils = new HttpUtils(new UrlGenerator($routes, (new RequestContext())->fromRequest($request)), $urlMatcher);
+
+        $this->assertTrue($utils->checkRequestPath($request, 'App\Controller\FooBarController'));
     }
 
     public function testCheckPathWithoutRouteParam()

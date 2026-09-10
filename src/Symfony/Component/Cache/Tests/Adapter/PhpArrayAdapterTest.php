@@ -14,6 +14,7 @@ namespace Symfony\Component\Cache\Tests\Adapter;
 use PHPUnit\Framework\Attributes\Group;
 use Psr\Cache\CacheItemInterface;
 use Psr\Cache\CacheItemPoolInterface;
+use Symfony\Component\Cache\Adapter\ArrayAdapter;
 use Symfony\Component\Cache\Adapter\FilesystemAdapter;
 use Symfony\Component\Cache\Adapter\NullAdapter;
 use Symfony\Component\Cache\Adapter\PhpArrayAdapter;
@@ -22,7 +23,7 @@ use Symfony\Component\Filesystem\Filesystem;
 #[Group('time-sensitive')]
 class PhpArrayAdapterTest extends AdapterTestCase
 {
-    protected $skippedTests = [
+    protected array $skippedTests = [
         'testGet' => 'PhpArrayAdapter is read-only.',
         'testDontSaveWhenAskedNotTo' => 'PhpArrayAdapter is read-only.',
         'testRecursiveGet' => 'PhpArrayAdapter is read-only.',
@@ -57,6 +58,7 @@ class PhpArrayAdapterTest extends AdapterTestCase
 
         'testDefaultLifeTime' => 'PhpArrayAdapter does not allow configuring a default lifetime.',
         'testPrune' => 'PhpArrayAdapter just proxies',
+        'testClearWithInvalidPrefix' => 'PhpArrayAdapter does not validate the prefix.',
 
         'testNamespaces' => 'PhpArrayAdapter does not support namespaces.',
     ];
@@ -79,11 +81,16 @@ class PhpArrayAdapterTest extends AdapterTestCase
 
     public function createCachePool(int $defaultLifetime = 0, ?string $testMethod = null): CacheItemPoolInterface
     {
-        if ('testGetMetadata' === $testMethod || 'testClearPrefix' === $testMethod) {
+        if ('testGetMetadata' === $testMethod || 'testClearPrefix' === $testMethod || 'testClearPrefixWithUnderscore' === $testMethod) {
             return new PhpArrayAdapter(self::$file, new FilesystemAdapter());
         }
 
         return new PhpArrayAdapterWrapper(self::$file, new NullAdapter());
+    }
+
+    public function testDeleteItemsValidatesEveryKeyBeforeMutation()
+    {
+        $this->markTestSkipped('PhpArrayAdapter does not throw exceptions on invalid key.');
     }
 
     public function testStore()
@@ -145,6 +152,22 @@ class PhpArrayAdapterTest extends AdapterTestCase
         $values = eval(substr(file_get_contents(self::$file), 6));
 
         $this->assertSame($expected, $values, 'Warm up should create a PHP file that OPCache can load in memory');
+    }
+
+    public function testDeleteItemsOnUninitializedAdapter()
+    {
+        // A stored (read-only) key must be handled the same way whether the
+        // adapter has been initialized yet or not, and identically to deleteItem().
+        (new PhpArrayAdapter(self::$file, new NullAdapter()))->warmUp(['foo' => 'stored-value']);
+
+        $fallback = new ArrayAdapter();
+        $fallback->save($fallback->getItem('foo')->set('fallback-value'));
+
+        // Fresh, not-yet-initialized instance; deleteItems() is the first call.
+        $adapter = new PhpArrayAdapter(self::$file, $fallback);
+
+        $this->assertFalse($adapter->deleteItems(['foo']), 'A stored key cannot be deleted.');
+        $this->assertTrue($fallback->hasItem('foo'), 'A stored key must not be deleted from the fallback pool.');
     }
 }
 

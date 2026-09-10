@@ -14,6 +14,7 @@ namespace Symfony\Component\HttpKernel\Tests\HttpCache;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use Symfony\Component\EventDispatcher\EventDispatcher;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Event\TerminateEvent;
@@ -95,6 +96,47 @@ class HttpCacheTest extends HttpCacheTestCase
         $this->cache->terminate($this->request, $this->response);
 
         $this->assertCount(1, $terminateEvents);
+    }
+
+    #[DataProvider('provideTerminateBackendRequestCases')]
+    public function testTerminateUsesBackendRequestOnCacheMiss(string $method, string $expectedMethod)
+    {
+        $terminateEvents = [];
+
+        $eventDispatcher = $this->createStub(EventDispatcher::class);
+        $eventDispatcher
+            ->method('dispatch')
+            ->willReturnCallback(static function ($event) use (&$terminateEvents) {
+                if ($event instanceof TerminateEvent) {
+                    $terminateEvents[] = $event;
+                }
+
+                return $event;
+            });
+
+        $this->setNextResponse(
+            200,
+            ['Cache-Control' => 'public, s-maxage=60'],
+            'Hello World',
+            static function (Request $request): void {
+                $request->attributes->set('terminate_attribute', 'present');
+            },
+            $eventDispatcher
+        );
+
+        $this->request($method, '/');
+        $this->cache->terminate($this->request, $this->response);
+
+        $this->assertCount(1, $terminateEvents);
+        $this->assertSame($expectedMethod, $terminateEvents[0]->getRequest()->getMethod());
+        $this->assertSame('present', $terminateEvents[0]->getRequest()->attributes->get('terminate_attribute'));
+    }
+
+    public static function provideTerminateBackendRequestCases(): iterable
+    {
+        yield 'GET is forwarded as-is' => ['GET', 'GET'];
+        // HEAD requests are forwarded to the backend as GET sub-requests
+        yield 'HEAD is forwarded as GET' => ['HEAD', 'GET'];
     }
 
     public function testPassesOnNonGetHeadRequests()
@@ -490,6 +532,41 @@ class HttpCacheTest extends HttpCacheTestCase
         $this->request('GET', '/');
         $this->assertEquals(200, $this->response->getStatusCode());
         $this->assertTraceNotContains('store');
+    }
+
+    public function testDoesNotCacheBinaryFileResponses()
+    {
+        $file = tempnam(sys_get_temp_dir(), 'sf_binary_file_');
+        file_put_contents($file, 'Hello World');
+
+        $this->kernel = new class($file) extends TestHttpKernel {
+            public function __construct(private string $file)
+            {
+                parent::__construct(null, 200, []);
+            }
+
+            public function callController(Request $request): Response
+            {
+                $this->called = true;
+
+                return (new BinaryFileResponse($this->file, 200, ['Content-Type' => 'text/plain']))->setMaxAge(10);
+            }
+        };
+
+        $this->request('GET', '/');
+        $this->assertHttpKernelIsCalled();
+        $this->assertEquals(200, $this->response->getStatusCode());
+
+        $this->request('GET', '/');
+        $this->assertHttpKernelIsCalled();
+        $this->assertTraceNotContains('fresh');
+        $this->assertInstanceOf(BinaryFileResponse::class, $this->response);
+
+        ob_start();
+        $this->response->sendContent();
+        $this->assertSame('Hello World', ob_get_clean());
+
+        unlink($file);
     }
 
     public function testCachesResponsesWithExplicitNoCacheDirective()
@@ -1654,6 +1731,55 @@ class HttpCacheTest extends HttpCacheTestCase
         // been a GET."
         $this->assertSame('', $this->response->getContent());
         $this->assertEquals(12, $this->response->headers->get('Content-Length'));
+    }
+
+    public function testBackendCannotSetBodyFileHeader()
+    {
+        $file = sys_get_temp_dir().'/http_cache_local_file.txt';
+        file_put_contents($file, 'contents of a local file');
+
+        try {
+            $this->setNextResponse(200, ['X-Body-File' => $file], 'backend body');
+            $this->request('GET', '/');
+
+            $this->assertSame('backend body', $this->response->getContent());
+            $this->assertFalse($this->response->headers->has('X-Body-File'));
+        } finally {
+            @unlink($file);
+        }
+    }
+
+    public function testBackendCannotSetBodyEvalHeader()
+    {
+        $boundary = str_repeat('b', HttpCache::BODY_EVAL_BOUNDARY_LENGTH);
+        $body = $boundary.'start'.$boundary."/embedded\n\n\nend".$boundary;
+
+        $this->setNextResponses([
+            [
+                'status' => 200,
+                'body' => $body,
+                'headers' => ['X-Body-Eval' => 'ESI'],
+            ],
+            [
+                'status' => 200,
+                'body' => 'embedded content',
+                'headers' => [],
+            ],
+        ]);
+
+        $this->request('GET', '/', [], [], true);
+
+        $this->assertSame($body, $this->response->getContent());
+        $this->assertFalse($this->response->headers->has('X-Body-Eval'));
+    }
+
+    public function testBackendCannotSetContentDigestHeader()
+    {
+        $this->setNextResponse(200, ['X-Content-Digest' => 'from-the-backend'], 'backend body');
+        $this->request('GET', '/');
+
+        $this->assertSame('backend body', $this->response->getContent());
+        $this->assertFalse($this->response->headers->has('X-Content-Digest'));
     }
 
     public function testClientIpIsAlwaysLocalhostForForwardedRequests()

@@ -81,13 +81,13 @@ class DynamoDbStore implements PersistingStoreInterface
 
             // check for extra keys in options
             $optionsExtraKeys = array_diff_key($options, self::DEFAULT_OPTIONS);
-            if (0 < \count($optionsExtraKeys)) {
+            if ($optionsExtraKeys) {
                 throw new InvalidArgumentException(\sprintf('Unknown option found: [%s]. Allowed options are [%s].', implode(', ', $optionsExtraKeys), implode(', ', array_keys(self::DEFAULT_OPTIONS))));
             }
 
             // check for extra keys in query
             $queryExtraKeys = array_diff_key($query, self::DEFAULT_OPTIONS);
-            if (0 < \count($queryExtraKeys)) {
+            if ($queryExtraKeys) {
                 throw new InvalidArgumentException(\sprintf('Unknown option found in DSN: [%s]. Allowed options are [%s].', implode(', ', $queryExtraKeys), implode(', ', array_keys(self::DEFAULT_OPTIONS))));
             }
 
@@ -174,12 +174,23 @@ class DynamoDbStore implements PersistingStoreInterface
 
     public function delete(Key $key): void
     {
-        $this->client->deleteItem(new DeleteItemInput([
-            'TableName' => $this->tableName,
-            'Key' => [
-                $this->idAttr => new AttributeValue(['S' => $this->getHashedKey($key)]),
-            ],
-        ]));
+        try {
+            $this->client->deleteItem(new DeleteItemInput([
+                'TableName' => $this->tableName,
+                'Key' => [
+                    $this->idAttr => new AttributeValue(['S' => $this->getHashedKey($key)]),
+                ],
+                'ConditionExpression' => '#token = :token',
+                'ExpressionAttributeNames' => [
+                    '#token' => $this->tokenAttr,
+                ],
+                'ExpressionAttributeValues' => [
+                    ':token' => new AttributeValue(['S' => $this->getUniqueToken($key)]),
+                ],
+            ]));
+        } catch (ConditionalCheckFailedException) {
+            // the lock is held by someone else, or it doesn't exist anymore
+        }
     }
 
     public function exists(Key $key): bool

@@ -17,7 +17,8 @@ use Symfony\Bundle\SecurityBundle\DependencyInjection\Security\Factory\Authentic
 use Symfony\Bundle\SecurityBundle\DependencyInjection\Security\Factory\FirewallListenerFactoryInterface;
 use Symfony\Bundle\SecurityBundle\DependencyInjection\SecurityExtension;
 use Symfony\Bundle\SecurityBundle\SecurityBundle;
-use Symfony\Bundle\SecurityBundle\Tests\DependencyInjection\Fixtures\UserProvider\DummyProvider;
+use Symfony\Bundle\SecurityBundle\Tests\DependencyInjection\Fixtures\UserProviderFactory\CustomProviderFactory;
+use Symfony\Bundle\SecurityBundle\Tests\DependencyInjection\Fixtures\UserProviderFactory\DummyProviderFactory;
 use Symfony\Component\Config\Definition\Builder\NodeDefinition;
 use Symfony\Component\Config\Definition\Exception\InvalidConfigurationException;
 use Symfony\Component\DependencyInjection\Argument\IteratorArgument;
@@ -30,6 +31,7 @@ use Symfony\Component\ExpressionLanguage\Expression;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\RequestMatcher\PathRequestMatcher;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\Ldap\Ldap;
 use Symfony\Component\PasswordHasher\PasswordHasherInterface;
 use Symfony\Component\Security\Core\Authentication\Token\TokenInterface;
 use Symfony\Component\Security\Core\Exception\AuthenticationException;
@@ -43,6 +45,30 @@ use Symfony\Component\Security\Http\Authenticator\Passport\Passport;
 
 class SecurityExtensionTest extends TestCase
 {
+    public function testLdapAndNonLdapVariantsOfTheSameAuthenticatorCanShareAFirewall()
+    {
+        $container = $this->getRawContainer();
+        $container->register('Symfony\\Component\\Ldap\\Ldap', Ldap::class)->addTag('ldap');
+        $container->loadFromExtension('security', [
+            'providers' => ['default' => ['id' => 'foo']],
+            'firewalls' => [
+                'main' => [
+                    'entry_point' => 'form_login',
+                    'form_login' => ['check_path' => '/login_check'],
+                    'form_login_ldap' => ['service' => 'Symfony\\Component\\Ldap\\Ldap', 'check_path' => '/login_check_ldap'],
+                ],
+            ],
+        ]);
+        $container->compile();
+
+        $plain = $container->getDefinition('security.authenticator.form_login.main');
+        $this->assertSame('/login_check', $plain->getArgument(4)['check_path']);
+
+        $decorated = $container->getDefinition('security.authenticator.form_login_ldap.main')->getArgument(0);
+        $this->assertSame('security.authenticator.form_login_ldap.main.inner', (string) $decorated);
+        $this->assertSame('/login_check_ldap', $container->getDefinition((string) $decorated)->getArgument(4)['check_path']);
+    }
+
     public function testInvalidCheckPath()
     {
         $container = $this->getRawContainer();
@@ -68,16 +94,50 @@ class SecurityExtensionTest extends TestCase
         $container->compile();
     }
 
+    public function testFirewallWithCustomUserProvider()
+    {
+        $container = $this->getRawContainer();
+
+        $extension = $container->getExtension('security');
+        $extension->addUserProviderFactory(new CustomProviderFactory());
+
+        $container->loadFromExtension('security', [
+            'providers' => [
+                'my_app_provider' => [
+                    'custom' => [
+                        'foo' => 'baz',
+                    ],
+                ],
+            ],
+
+            'firewalls' => [
+                'some_firewall' => [
+                    'pattern' => '/.*',
+                    'http_basic' => [],
+                ],
+            ],
+        ]);
+
+        $container->compile();
+
+        $this->assertTrue($container->hasDefinition('security.user.provider.concrete.my_app_provider'));
+        $this->assertEquals('baz', $container->getDefinition('security.user.provider.concrete.my_app_provider')->getArgument('$foo'));
+    }
+
     public function testFirewallWithInvalidUserProvider()
     {
         $container = $this->getRawContainer();
 
         $extension = $container->getExtension('security');
-        $extension->addUserProviderFactory(new DummyProvider());
+        $extension->addUserProviderFactory(new CustomProviderFactory());
 
         $container->loadFromExtension('security', [
             'providers' => [
-                'my_foo' => ['foo' => []],
+                'my_app_provider' => [
+                    'some_other' => [
+                        'bar' => 'baz',
+                    ],
+                ],
             ],
 
             'firewalls' => [
@@ -89,9 +149,72 @@ class SecurityExtensionTest extends TestCase
         ]);
 
         $this->expectException(InvalidConfigurationException::class);
-        $this->expectExceptionMessage('Unable to create definition for "security.user.provider.concrete.my_foo" user provider');
+        $this->expectExceptionMessage('Unrecognized option "some_other" under "security.providers.my_app_provider". Available options are "chain", "custom", "id", "ldap", "memory".');
 
         $container->compile();
+    }
+
+    public function testFirewallWithInvalidUserProviderConfig()
+    {
+        $container = $this->getRawContainer();
+
+        $extension = $container->getExtension('security');
+        $extension->addUserProviderFactory(new CustomProviderFactory());
+
+        $container->loadFromExtension('security', [
+            'providers' => [
+                'my_app_provider' => [
+                    'custom' => [
+                        'bar' => 'baz',
+                    ],
+                ],
+            ],
+
+            'firewalls' => [
+                'some_firewall' => [
+                    'pattern' => '/.*',
+                    'http_basic' => [],
+                ],
+            ],
+        ]);
+
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('Unrecognized option "bar" under "security.providers.my_app_provider.custom". Available option is "foo".');
+
+        $container->compile();
+    }
+
+    public function testFirewallWithUserProviderWithoutConfig()
+    {
+        $container = $this->getRawContainer();
+
+        $extension = $container->getExtension('security');
+        $extension->addUserProviderFactory(new DummyProviderFactory());
+
+        $container->loadFromExtension('security', [
+            'providers' => [
+                'my_app_provider' => [
+                    'foo' => null,
+                ],
+                'my_other_app_provider' => [
+                    'foo' => [],
+                ],
+            ],
+
+            'firewalls' => [
+                'some_firewall' => [
+                    'pattern' => '/.*',
+                    'http_basic' => [
+                        'provider' => 'my_app_provider',
+                    ],
+                ],
+            ],
+        ]);
+
+        $container->compile();
+
+        $this->assertTrue($container->hasDefinition('security.user.provider.concrete.my_app_provider'));
+        $this->assertTrue($container->hasDefinition('security.user.provider.concrete.my_other_app_provider'));
     }
 
     public function testDisableRoleHierarchyVoter()
@@ -560,6 +683,126 @@ class SecurityExtensionTest extends TestCase
         $this->assertSame('very', $handler->getArgument(2));
     }
 
+    public function testRememberMeSignaturePropertiesDefaultToPassword()
+    {
+        $container = $this->getRawContainer();
+
+        $container->loadFromExtension('security', [
+            'firewalls' => [
+                'default' => [
+                    'remember_me' => ['secret' => 'very'],
+                ],
+            ],
+        ]);
+
+        $container->compile();
+
+        $hasher = $container->getDefinition('security.authenticator.remember_me_signature_hasher.default');
+        $this->assertSame(['password'], $hasher->getArgument(1));
+    }
+
+    public function testRememberMeSignaturePropertiesAreImplicitByDefaultWithATokenProvider()
+    {
+        $container = $this->getRawContainer();
+
+        $container->register('custom_token_provider', \stdClass::class);
+        $container->loadFromExtension('security', [
+            'firewalls' => [
+                'default' => [
+                    'remember_me' => ['token_provider' => 'custom_token_provider'],
+                ],
+            ],
+        ]);
+
+        $container->compile();
+
+        $handler = $container->getDefinition('security.authenticator.remember_me_handler.default');
+        $this->assertNull($handler->getArgument(6));
+    }
+
+    public function testRememberMeSignaturePropertiesAreBoundToTokensWhenConfigured()
+    {
+        $container = $this->getRawContainer();
+
+        $container->register('custom_token_provider', \stdClass::class);
+        $container->loadFromExtension('security', [
+            'firewalls' => [
+                'default' => [
+                    'remember_me' => [
+                        'token_provider' => 'custom_token_provider',
+                        'signature_properties' => ['email', 'password'],
+                    ],
+                ],
+            ],
+        ]);
+
+        $container->compile();
+
+        $handler = $container->getDefinition('security.authenticator.remember_me_handler.default');
+        $this->assertSame(['email', 'password'], $handler->getArgument(6));
+    }
+
+    public function testRememberMeSignaturePropertiesCannotBeUsedWithACustomHandler()
+    {
+        $container = $this->getRawContainer();
+
+        $container->register('custom_remember_me', \stdClass::class);
+        $container->loadFromExtension('security', [
+            'firewalls' => [
+                'default' => [
+                    'remember_me' => [
+                        'service' => 'custom_remember_me',
+                        'signature_properties' => ['password'],
+                    ],
+                ],
+            ],
+        ]);
+
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('You cannot use both "service" and "signature_properties" in "security.firewalls.default.remember_me" because the custom handler signs the cookies itself and the option would have no effect.');
+        $container->compile();
+    }
+
+    public function testCustomRememberMeHandlerWithATokenProviderReportsTheTokenProviderConflict()
+    {
+        $container = $this->getRawContainer();
+
+        $container->register('custom_remember_me', \stdClass::class);
+        $container->register('custom_token_provider', \stdClass::class);
+        $container->loadFromExtension('security', [
+            'firewalls' => [
+                'default' => [
+                    'remember_me' => [
+                        'service' => 'custom_remember_me',
+                        'token_provider' => 'custom_token_provider',
+                        'signature_properties' => ['password'],
+                    ],
+                ],
+            ],
+        ]);
+
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('You cannot use both "service" and "token_provider" in "security.firewalls.default.remember_me".');
+        $container->compile();
+    }
+
+    public function testRememberMeSignaturePropertiesCannotBeEmpty()
+    {
+        $container = $this->getRawContainer();
+
+        $container->loadFromExtension('security', [
+            'firewalls' => [
+                'default' => [
+                    'remember_me' => ['signature_properties' => []],
+                ],
+            ],
+        ]);
+
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('The path "security.firewalls.default.remember_me.signature_properties" should have at least 1 element(s) defined.');
+        $container->compile();
+    }
+
     public static function sessionConfigurationProvider(): array
     {
         return [
@@ -821,6 +1064,7 @@ class SecurityExtensionTest extends TestCase
         $container->loadFromExtension('security', [
             'firewalls' => [
                 'main' => [
+                    'entry_point' => 'form_login',
                     'custom_listener' => true,
                 ],
             ],
@@ -900,7 +1144,8 @@ class SecurityExtensionTest extends TestCase
                     'migrate_from' => 'legacy',
                 ],
             ],
-            'firewalls' => ['main' => ['http_basic' => true]],
+            'firewalls' => ['main' => [
+                'entry_point' => 'form_login', 'http_basic' => true]],
         ]);
 
         $container->compile();

@@ -59,7 +59,7 @@ class FormDataCollectorTest extends TestCase
             'type_class' => FormType::class,
             'synchronized' => true,
             'passed_options' => [],
-            'resolved_options' => $this->childForm->getConfig()->getOptions(),
+            'resolved_options' => self::removeClosures($this->childForm->getConfig()->getOptions()),
             'default_data' => [
                 'norm' => null,
                 'view' => '',
@@ -78,7 +78,7 @@ class FormDataCollectorTest extends TestCase
             'type_class' => FormType::class,
             'synchronized' => true,
             'passed_options' => [],
-            'resolved_options' => $this->form->getConfig()->getOptions(),
+            'resolved_options' => self::removeClosures($this->form->getConfig()->getOptions()),
             'default_data' => [
                 'norm' => null,
             ],
@@ -97,11 +97,11 @@ class FormDataCollectorTest extends TestCase
                 'name' => $formData,
             ],
             'forms_by_hash' => [
-                spl_object_hash($this->form) => $formData,
-                spl_object_hash($this->childForm) => $childFormData,
+                spl_object_id($this->form) => $formData,
+                spl_object_id($this->childForm) => $childFormData,
             ],
             'nb_errors' => 0,
-        ], $this->dataCollector->getData());
+        ], self::removeClosures($this->dataCollector->getData()));
     }
 
     public function testBuildMultiplePreliminaryFormTrees()
@@ -119,7 +119,7 @@ class FormDataCollectorTest extends TestCase
             'type_class' => FormType::class,
             'synchronized' => true,
             'passed_options' => [],
-            'resolved_options' => $form1->getConfig()->getOptions(),
+            'resolved_options' => self::removeClosures($form1->getConfig()->getOptions()),
             'children' => [],
         ];
 
@@ -128,10 +128,10 @@ class FormDataCollectorTest extends TestCase
                 'form1' => $form1Data,
             ],
             'forms_by_hash' => [
-                spl_object_hash($form1) => $form1Data,
+                spl_object_id($form1) => $form1Data,
             ],
             'nb_errors' => 0,
-        ], $this->dataCollector->getData());
+        ], self::removeClosures($this->dataCollector->getData()));
 
         $this->dataCollector->buildPreliminaryFormTree($form2);
 
@@ -141,7 +141,7 @@ class FormDataCollectorTest extends TestCase
             'type_class' => FormType::class,
             'synchronized' => true,
             'passed_options' => [],
-            'resolved_options' => $form2->getConfig()->getOptions(),
+            'resolved_options' => self::removeClosures($form2->getConfig()->getOptions()),
             'children' => [],
         ];
 
@@ -151,11 +151,11 @@ class FormDataCollectorTest extends TestCase
                 'form2' => $form2Data,
             ],
             'forms_by_hash' => [
-                spl_object_hash($form1) => $form1Data,
-                spl_object_hash($form2) => $form2Data,
+                spl_object_id($form1) => $form1Data,
+                spl_object_id($form2) => $form2Data,
             ],
             'nb_errors' => 0,
-        ], $this->dataCollector->getData());
+        ], self::removeClosures($this->dataCollector->getData()));
     }
 
     public function testBuildSamePreliminaryFormTreeMultipleTimes()
@@ -169,7 +169,7 @@ class FormDataCollectorTest extends TestCase
             'type_class' => FormType::class,
             'synchronized' => true,
             'passed_options' => [],
-            'resolved_options' => $this->form->getConfig()->getOptions(),
+            'resolved_options' => self::removeClosures($this->form->getConfig()->getOptions()),
             'children' => [],
         ];
 
@@ -178,10 +178,10 @@ class FormDataCollectorTest extends TestCase
                 'name' => $formData,
             ],
             'forms_by_hash' => [
-                spl_object_hash($this->form) => $formData,
+                spl_object_id($this->form) => $formData,
             ],
             'nb_errors' => 0,
-        ], $this->dataCollector->getData());
+        ], self::removeClosures($this->dataCollector->getData()));
 
         $this->dataCollector->collectDefaultData($this->form);
         $this->dataCollector->buildPreliminaryFormTree($this->form);
@@ -192,7 +192,7 @@ class FormDataCollectorTest extends TestCase
             'type_class' => FormType::class,
             'synchronized' => true,
             'passed_options' => [],
-            'resolved_options' => $this->form->getConfig()->getOptions(),
+            'resolved_options' => self::removeClosures($this->form->getConfig()->getOptions()),
             'default_data' => [
                 'norm' => null,
             ],
@@ -205,10 +205,10 @@ class FormDataCollectorTest extends TestCase
                 'name' => $formData,
             ],
             'forms_by_hash' => [
-                spl_object_hash($this->form) => $formData,
+                spl_object_id($this->form) => $formData,
             ],
             'nb_errors' => 0,
-        ], $this->dataCollector->getData());
+        ], self::removeClosures($this->dataCollector->getData()));
     }
 
     public function testBuildPreliminaryFormTreeWithoutCollectingAnyData()
@@ -224,10 +224,10 @@ class FormDataCollectorTest extends TestCase
                 'name' => $formData,
             ],
             'forms_by_hash' => [
-                spl_object_hash($this->form) => $formData,
+                spl_object_id($this->form) => $formData,
             ],
             'nb_errors' => 0,
-        ], $this->dataCollector->getData());
+        ], self::removeClosures($this->dataCollector->getData()));
     }
 
     public function testBuildFinalFormTree()
@@ -247,7 +247,7 @@ class FormDataCollectorTest extends TestCase
             'type_class' => FormType::class,
             'synchronized' => true,
             'passed_options' => [],
-            'resolved_options' => $this->childForm->getConfig()->getOptions(),
+            'resolved_options' => self::removeClosures($this->childForm->getConfig()->getOptions()),
             'default_data' => [
                 'norm' => null,
                 'view' => '',
@@ -270,7 +270,7 @@ class FormDataCollectorTest extends TestCase
             'type_class' => FormType::class,
             'synchronized' => true,
             'passed_options' => [],
-            'resolved_options' => $this->form->getConfig()->getOptions(),
+            'resolved_options' => self::removeClosures($this->form->getConfig()->getOptions()),
             'default_data' => [
                 'norm' => null,
             ],
@@ -293,11 +293,11 @@ class FormDataCollectorTest extends TestCase
                 'name' => $formData,
             ],
             'forms_by_hash' => [
-                spl_object_hash($this->form) => $formData,
-                spl_object_hash($this->childForm) => $childFormData,
+                spl_object_id($this->form) => $formData,
+                spl_object_id($this->childForm) => $childFormData,
             ],
             'nb_errors' => 0,
-        ], $this->dataCollector->getData());
+        ], self::removeClosures($this->dataCollector->getData()));
     }
 
     public function testSerializeWithFormAddedMultipleTimes()
@@ -363,12 +363,12 @@ class FormDataCollectorTest extends TestCase
                 'name' => $formData,
             ],
             'forms_by_hash' => [
-                spl_object_hash($this->form) => $formData,
-                spl_object_hash($child1) => $child1Data,
-                spl_object_hash($child2) => $child2Data,
+                spl_object_id($this->form) => $formData,
+                spl_object_id($child1) => $child1Data,
+                spl_object_id($child2) => $child2Data,
             ],
             'nb_errors' => 0,
-        ], $this->dataCollector->getData());
+        ], self::removeClosures($this->dataCollector->getData()));
 
         $this->dataCollector->buildFinalFormTree($this->form, $this->view);
 
@@ -384,12 +384,12 @@ class FormDataCollectorTest extends TestCase
                 'name' => $formData,
             ],
             'forms_by_hash' => [
-                spl_object_hash($this->form) => $formData,
-                spl_object_hash($child1) => $child1Data,
-                spl_object_hash($child2) => $child2Data,
+                spl_object_id($this->form) => $formData,
+                spl_object_id($child1) => $child1Data,
+                spl_object_id($child2) => $child2Data,
             ],
             'nb_errors' => 0,
-        ], $this->dataCollector->getData());
+        ], self::removeClosures($this->dataCollector->getData()));
     }
 
     public function testChildViewsCanBeWithoutCorrespondingChildForms()
@@ -415,7 +415,7 @@ class FormDataCollectorTest extends TestCase
             'type_class' => FormType::class,
             'synchronized' => true,
             'passed_options' => [],
-            'resolved_options' => $this->form->getConfig()->getOptions(),
+            'resolved_options' => self::removeClosures($this->form->getConfig()->getOptions()),
             'children' => [
                 'child' => $childFormData,
             ],
@@ -426,11 +426,11 @@ class FormDataCollectorTest extends TestCase
                 'name' => $formData,
             ],
             'forms_by_hash' => [
-                spl_object_hash($this->form) => $formData,
+                spl_object_id($this->form) => $formData,
                 // no child entry
             ],
             'nb_errors' => 0,
-        ], $this->dataCollector->getData());
+        ], self::removeClosures($this->dataCollector->getData()));
     }
 
     public function testChildViewsWithoutCorrespondingChildFormsMayBeExplicitlyAssociated()
@@ -454,7 +454,7 @@ class FormDataCollectorTest extends TestCase
             'type_class' => FormType::class,
             'synchronized' => true,
             'passed_options' => [],
-            'resolved_options' => $this->childForm->getConfig()->getOptions(),
+            'resolved_options' => self::removeClosures($this->childForm->getConfig()->getOptions()),
             'children' => [],
         ];
 
@@ -464,7 +464,7 @@ class FormDataCollectorTest extends TestCase
             'type_class' => FormType::class,
             'synchronized' => true,
             'passed_options' => [],
-            'resolved_options' => $this->form->getConfig()->getOptions(),
+            'resolved_options' => self::removeClosures($this->form->getConfig()->getOptions()),
             'children' => [
                 'child' => $childFormData,
             ],
@@ -475,11 +475,11 @@ class FormDataCollectorTest extends TestCase
                 'name' => $formData,
             ],
             'forms_by_hash' => [
-                spl_object_hash($this->form) => $formData,
-                spl_object_hash($this->childForm) => $childFormData,
+                spl_object_id($this->form) => $formData,
+                spl_object_id($this->childForm) => $childFormData,
             ],
             'nb_errors' => 0,
-        ], $this->dataCollector->getData());
+        ], self::removeClosures($this->dataCollector->getData()));
     }
 
     public function testCollectSubmittedDataCountsErrors()
@@ -614,5 +614,16 @@ class FormDataCollectorTest extends TestCase
     private function createChildForm(string $name, bool $compound = false): FormInterface
     {
         return $this->factory->createNamedBuilder($name, FormType::class, null, ['auto_initialize' => false, 'compound' => $compound])->getForm();
+    }
+
+    private static function removeClosures(array $data): array
+    {
+        array_walk_recursive($data, static function (&$value) {
+            if ($value instanceof \Closure) {
+                $value = '(closure)';
+            }
+        });
+
+        return $data;
     }
 }

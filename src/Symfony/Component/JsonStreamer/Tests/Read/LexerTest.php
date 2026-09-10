@@ -38,11 +38,89 @@ class LexerTest extends TestCase
         $this->assertTokens([['false', 7]], '[1, 2, false]', 7, 5);
     }
 
+    public function testTokensSubsetWhenStreamIsConsumedBetweenChunks()
+    {
+        $json = '['.str_repeat('1, ', 4000).'1]';
+        $resource = fopen('php://temp', 'w');
+        fwrite($resource, $json);
+
+        $lastToken = null;
+        foreach ((new Lexer())->getTokens($resource, 0, \strlen($json)) as $token) {
+            fseek($resource, 0, \SEEK_END);
+            fread($resource, 1);
+            $lastToken = $token[0];
+        }
+
+        $this->assertSame(']', $lastToken);
+    }
+
+    public function testRejectsLengthBeyondEndOfStream()
+    {
+        $resource = fopen('php://temp', 'w');
+        fwrite($resource, '[1, 2');
+
+        $this->expectException(InvalidStreamException::class);
+        $this->expectExceptionMessage('Unterminated JSON.');
+
+        iterator_to_array((new Lexer())->getTokens($resource, 0, 100));
+    }
+
     public function testTokenizeOverflowingBuffer()
     {
         $veryLongString = \sprintf('"%s"', str_repeat('.', 20000));
 
         $this->assertTokens([[$veryLongString, 0]], $veryLongString);
+    }
+
+    public function testRejectsDeeplyNestedInput()
+    {
+        $depth = 600;
+        $resource = fopen('php://temp', 'w');
+        fwrite($resource, str_repeat('[', $depth).str_repeat(']', $depth));
+        rewind($resource);
+
+        $this->expectException(InvalidStreamException::class);
+        $this->expectExceptionMessage('Maximum stack depth');
+
+        iterator_to_array((new Lexer())->getTokens($resource, 0, null));
+    }
+
+    public function testAcceptsDepthJustBelowMax()
+    {
+        $depth = 511;
+        $resource = fopen('php://temp', 'w');
+        fwrite($resource, str_repeat('[', $depth).'1'.str_repeat(']', $depth));
+        rewind($resource);
+
+        iterator_to_array((new Lexer())->getTokens($resource, 0, null));
+
+        $this->addToAssertionCount(1);
+    }
+
+    public function testRejectsAtMaxDepthBoundary()
+    {
+        $depth = 512;
+        $resource = fopen('php://temp', 'w');
+        fwrite($resource, str_repeat('[', $depth).'1'.str_repeat(']', $depth));
+        rewind($resource);
+
+        $this->expectException(InvalidStreamException::class);
+        $this->expectExceptionMessage('Maximum stack depth');
+
+        iterator_to_array((new Lexer())->getTokens($resource, 0, null));
+    }
+
+    public function testRejectsAtMaxDepthBoundaryForDicts()
+    {
+        $depth = 512;
+        $resource = fopen('php://temp', 'w');
+        fwrite($resource, str_repeat('{"a":', $depth).'1'.str_repeat('}', $depth));
+        rewind($resource);
+
+        $this->expectException(InvalidStreamException::class);
+        $this->expectExceptionMessage('Maximum stack depth');
+
+        iterator_to_array((new Lexer())->getTokens($resource, 0, null));
     }
 
     #[DataProvider('rfc8259ComplianceProvider')]

@@ -244,6 +244,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addFormSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -829,6 +832,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addAssetsSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -910,6 +916,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addAssetMapperSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -1031,6 +1040,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addTranslatorSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -1118,6 +1130,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addValidationSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -1153,6 +1168,10 @@ class Configuration implements ConfigurationInterface
                             ->end()
                         ->end()
                         ->booleanNode('disable_translation')
+                            ->defaultFalse()
+                        ->end()
+                        ->booleanNode('property_metadata_existence_check')
+                            ->info('When enabled, validateProperty() and validatePropertyValue() throw an exception if no metadata is found for the given property.')
                             ->defaultFalse()
                         ->end()
                         ->arrayNode('auto_mapping')
@@ -1204,6 +1223,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addSerializerSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $defaultContextNode = fn () => (new NodeBuilder())
@@ -1272,6 +1294,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $willBeAvailable
+     */
     private function addPropertyAccessSection(ArrayNodeDefinition $rootNode, callable $willBeAvailable): void
     {
         $rootNode
@@ -1292,6 +1317,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addPropertyInfoSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -1310,6 +1338,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addTypeInfoSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -1332,6 +1363,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $willBeAvailable
+     */
     private function addCacheSection(ArrayNodeDefinition $rootNode, callable $willBeAvailable): void
     {
         $rootNode
@@ -1514,6 +1548,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addLockSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -1580,6 +1617,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addSemaphoreSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -1635,6 +1675,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addWebLinkSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -1647,6 +1690,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addMessengerSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -1852,6 +1898,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addSchedulerSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -1877,6 +1926,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addHttpClientSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -2286,6 +2338,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addMailerSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -2294,7 +2349,7 @@ class Configuration implements ConfigurationInterface
                     ->info('Mailer configuration')
                     ->{$enableIfStandalone('symfony/mailer', Mailer::class)}()
                     ->validate()
-                        ->ifTrue(static fn ($v) => isset($v['dsn']) && \count($v['transports']))
+                        ->ifTrue(static fn ($v) => isset($v['dsn']) && $v['transports'])
                         ->thenInvalid('"dsn" and "transports" cannot be used together.')
                     ->end()
                     ->children()
@@ -2407,16 +2462,18 @@ class Configuration implements ConfigurationInterface
                                     ->defaultNull()
                                     ->beforeNormalization()
                                         ->ifString()
-                                        ->then(static function ($v): ?int {
-                                            if (\defined('OPENSSL_CIPHER_'.$v)) {
-                                                return \constant('OPENSSL_CIPHER_'.$v);
+                                        ->then(static function ($v): int {
+                                            $ciphers = self::getOpensslCiphers();
+
+                                            if (!isset($ciphers[$v])) {
+                                                throw new \InvalidArgumentException(\sprintf('"%s" is not a valid OPENSSL cipher.', $v));
                                             }
 
-                                            throw new \InvalidArgumentException(\sprintf('"%s" is not a valid OPENSSL cipher.', $v));
+                                            return $ciphers[$v];
                                         })
                                     ->end()
                                     ->validate()
-                                        ->ifTrue(static fn ($v) => \extension_loaded('openssl') && null !== $v && !\defined('OPENSSL_CIPHER_'.$v))
+                                        ->ifTrue(static fn ($v) => null !== $v && ($ciphers = self::getOpensslCiphers()) && !\in_array($v, $ciphers, true))
                                         ->thenInvalid('You must provide a valid cipher.')
                                     ->end()
                                 ->end()
@@ -2428,6 +2485,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addNotifierSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -2467,6 +2527,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addWebhookSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -2491,6 +2554,7 @@ class Configuration implements ConfigurationInterface
                                 ->end()
                                 ->scalarNode('secret')
                                     ->defaultValue('')
+                                    ->info('The secret used to verify incoming request signatures. It must be set in production: with an empty value, requests from any sender are accepted.')
                                 ->end()
                             ->end()
                         ->end()
@@ -2500,11 +2564,14 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addRemoteEventSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
             ->children()
-                ->arrayNode('remote-event')
+                ->arrayNode('remote_event')
                     ->info('RemoteEvent configuration')
                     ->{$enableIfStandalone('symfony/remote-event', RemoteEvent::class)}()
                 ->end()
@@ -2512,6 +2579,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addRateLimiterSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -2575,10 +2645,22 @@ class Configuration implements ConfigurationInterface
                                             ->integerNode('amount')->info('Amount of tokens to add each interval.')->defaultValue(1)->end()
                                         ->end()
                                     ->end()
+                                    ->scalarNode('anchor_at')
+                                        ->info('Aligns the "fixed_window" policy to a calendar (e.g. "2024-01-05 00:00:00 UTC" combined with `interval: 1 month` resets the counter on the 5th of each month). UTC if not specified.')
+                                        ->defaultNull()
+                                    ->end()
                                 ->end()
                                 ->validate()
                                     ->ifTrue(static fn ($v) => !\in_array($v['policy'], ['no_limit', 'compound'], true) && !isset($v['limit']))
                                     ->thenInvalid('A limit must be provided when using a policy different than "compound" or "no_limit".')
+                                ->end()
+                                ->validate()
+                                    ->ifTrue(static fn ($v) => isset($v['anchor_at']) && 'fixed_window' !== $v['policy'])
+                                    ->thenInvalid('The "anchor_at" option is only supported with the "fixed_window" policy.')
+                                ->end()
+                                ->validate()
+                                    ->ifTrue(static fn ($v) => isset($v['anchor_at']) && isset($v['interval']) && !preg_match('/\b(months?|years?)\b/i', $v['interval']))
+                                    ->thenInvalid('The "anchor_at" option requires an "interval" of at least one month.')
                                 ->end()
                             ->end()
                         ->end()
@@ -2588,6 +2670,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addUidSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -2615,12 +2700,19 @@ class Configuration implements ConfigurationInterface
                         ->scalarNode('time_based_uuid_node')
                             ->cannotBeEmpty()
                         ->end()
+                        ->scalarNode('uuid47_secret')
+                            ->info('A high-entropy secret used by the "uuid47_transformer" service. Defaults to "kernel.secret".')
+                            ->defaultNull()
+                        ->end()
                     ->end()
                 ->end()
             ->end()
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addHtmlSanitizerSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -2757,6 +2849,9 @@ class Configuration implements ConfigurationInterface
         ;
     }
 
+    /**
+     * @param-immediately-invoked-callable $enableIfStandalone
+     */
     private function addJsonStreamerSection(ArrayNodeDefinition $rootNode, callable $enableIfStandalone): void
     {
         $rootNode
@@ -2779,5 +2874,21 @@ class Configuration implements ConfigurationInterface
                 ->end()
             ->end()
         ;
+    }
+
+    /**
+     * @return array<string, int> The values of the OPENSSL_CIPHER_* constants, keyed by their unprefixed name
+     */
+    private static function getOpensslCiphers(): array
+    {
+        $ciphers = [];
+
+        foreach (get_defined_constants(true)['openssl'] ?? [] as $name => $value) {
+            if (str_starts_with($name, 'OPENSSL_CIPHER_')) {
+                $ciphers[substr($name, \strlen('OPENSSL_CIPHER_'))] = $value;
+            }
+        }
+
+        return $ciphers;
     }
 }

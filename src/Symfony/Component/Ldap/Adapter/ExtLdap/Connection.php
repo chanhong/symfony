@@ -69,7 +69,7 @@ class Connection extends AbstractConnection
             $this->connect();
         }
 
-        if (false === @ldap_bind($this->connection, $dn, $password)) {
+        if (!@ldap_bind($this->connection, $dn, $password)) {
             $error = ldap_error($this->connection);
             ldap_get_option($this->connection, \LDAP_OPT_DIAGNOSTIC_MESSAGE, $diagnostic);
 
@@ -97,7 +97,7 @@ class Connection extends AbstractConnection
             $this->connect();
         }
 
-        if (false === @ldap_sasl_bind($this->connection, $dn, $password, $mech, $realm, $authcId, $authzId, $props)) {
+        if (!@ldap_sasl_bind($this->connection, $dn, $password, $mech, $realm, $authcId, $authzId, $props)) {
             $error = ldap_error($this->connection);
             ldap_get_option($this->connection, \LDAP_OPT_DIAGNOSTIC_MESSAGE, $diagnostic);
 
@@ -178,7 +178,7 @@ class Connection extends AbstractConnection
             }
 
             if (!isset($parent['network_timeout'])) {
-                $options->setDefault('network_timeout', \ini_get('default_socket_timeout'));
+                $options->setDefault('network_timeout', (int) \ini_get('default_socket_timeout'));
             }
 
             $options->setDefaults([
@@ -203,7 +203,6 @@ class Connection extends AbstractConnection
         if (false === $connection = ldap_connect($this->config['connection_string'])) {
             throw new LdapException('Invalid connection string: '.$this->config['connection_string']);
         }
-
         $this->connection = $connection;
 
         foreach ($this->config['options'] as $name => $value) {
@@ -212,7 +211,7 @@ class Connection extends AbstractConnection
             }
         }
 
-        if ('tls' === $this->config['encryption'] && false === @ldap_start_tls($this->connection)) {
+        if ('tls' === $this->config['encryption'] && !@ldap_start_tls($this->connection)) {
             throw new LdapException('Could not initiate TLS connection: '.ldap_error($this->connection));
         }
     }

@@ -12,6 +12,7 @@
 namespace Symfony\Component\Mailer\Bridge\Amazon\Transport;
 
 use AsyncAws\Core\Exception\Http\HttpException;
+use AsyncAws\Core\Exception\Http\NetworkException;
 use AsyncAws\Ses\Input\SendEmailRequest;
 use AsyncAws\Ses\SesClient;
 use AsyncAws\Ses\ValueObject\Destination;
@@ -62,6 +63,8 @@ class SesHttpAsyncAwsTransport extends AbstractTransport
             $exception->appendDebug($e->getResponse()->getInfo('debug') ?? '');
 
             throw $exception;
+        } catch (NetworkException $e) {
+            throw new HttpTransportException('Could not reach the remote Amazon server.', $response, 0, $e);
         }
     }
 
@@ -73,7 +76,7 @@ class SesHttpAsyncAwsTransport extends AbstractTransport
             ]),
             'Content' => [
                 'Raw' => [
-                    'Data' => $message->toString(),
+                    'Data' => $this->getRawData($message),
                 ],
             ],
         ];
@@ -99,5 +102,37 @@ class SesHttpAsyncAwsTransport extends AbstractTransport
         }
 
         return new SendEmailRequest($request);
+    }
+
+    private function getRawData(SentMessage $message): string
+    {
+        $originalMessage = $message->getOriginalMessage();
+
+        if (!$originalMessage instanceof Message) {
+            return $message->toString();
+        }
+
+        $metadataNames = [];
+        foreach ($originalMessage->getHeaders()->all() as $name => $header) {
+            if ($header instanceof MetadataHeader) {
+                $metadataNames[] = $name;
+            }
+        }
+
+        if (!$metadataNames) {
+            return $message->toString();
+        }
+
+        // the metadata is sent as email tags, it must not leak into the delivered email
+        $originalMessage = clone $originalMessage;
+        $headers = $originalMessage->getHeaders();
+        foreach ($metadataNames as $name) {
+            $headers->remove($name);
+        }
+        if (!$headers->has('Message-ID')) {
+            $headers->addIdHeader('Message-ID', $message->getMessageId());
+        }
+
+        return $originalMessage->toString();
     }
 }

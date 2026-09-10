@@ -28,10 +28,13 @@ final class ReverseMappingPass implements CompilerPassInterface
         $reverseClassObjectMapperMetadataFactory = $container->getDefinition('object_mapper.metadata_factory.reverse_class');
 
         $classes = [];
-        foreach ($container->findTaggedResourceIds('object_mapper.map') as $tags) {
+        foreach ($container->findTaggedResourceIds('object_mapper.map', false) as $tags) {
             foreach ($tags as $tag) {
-                if (isset($tag['source'], $tag['target'])) {
-                    $classes[$tag['source']] = $tag['target'];
+                if (!isset($tag['source'], $tag['target'])) {
+                    continue;
+                }
+                if (!\in_array($tag['target'], $classes[$tag['source']] ?? [], true)) {
+                    $classes[$tag['source']][] = $tag['target'];
                 }
             }
         }

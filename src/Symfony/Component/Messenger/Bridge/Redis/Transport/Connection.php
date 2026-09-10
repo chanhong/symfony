@@ -239,12 +239,12 @@ class Connection
             }
         } else {
             $dsns = explode(',', $dsn);
-            $paramss = array_map(static function ($dsn) use (&$options) {
+            $dsnParams = array_map(static function ($dsn) use (&$options) {
                 return self::parseDsn($dsn, $options);
             }, $dsns);
 
             // Merge all the URLs, the last one overrides the previous ones
-            $params = array_merge(...$paramss);
+            $params = array_merge(...$dsnParams);
             $tls = 'rediss' === $params['scheme'] || 'valkeys' === $params['scheme'];
 
             // Regroup all the hosts in an array interpretable by RedisCluster
@@ -257,7 +257,7 @@ class Connection
                 }
 
                 return $params['host'].':'.($params['port'] ?? 6379);
-            }, $paramss, $dsns);
+            }, $dsnParams, $dsns);
         }
 
         if (isset($options['sentinel']) && isset($options['redis_sentinel']) && $options['sentinel'] !== $options['redis_sentinel']) {
@@ -481,7 +481,7 @@ class Connection
 
             if (\strlen($expiry) === \strlen($now) ? $expiry > $now : \strlen($expiry) < \strlen($now)) {
                 // if a future-placed message is popped because of a race condition with
-                // another running consumer, the message is readded to the queue
+                // another running consumer, the message is re-added to the queue
 
                 if (!$this->rawCommand('ZADD', 'NX', $expiry, $queuedMessage)) {
                     throw new TransportException('Could not add a message to the redis stream.');
@@ -579,8 +579,10 @@ class Connection
 
         try {
             $acknowledged = $redis->xack($this->stream, $this->group, [$id]);
-            if ($this->deleteAfterAck) {
-                $acknowledged = $redis->xdel($this->stream, [$id]);
+
+            // the ack decides the outcome: the entry may already be gone from the stream (e.g. trimmed), deleting it is best effort
+            if ($acknowledged && $this->deleteAfterAck && false === $redis->xdel($this->stream, [$id])) {
+                $redis->clearLastError();
             }
         } catch (\RedisException|\Relay\Exception $e) {
             throw new TransportException($e->getMessage(), 0, $e);
@@ -601,19 +603,21 @@ class Connection
         $redis = $this->getRedis();
 
         try {
-            $deleted = $redis->xack($this->stream, $this->group, [$id]);
-            if ($this->deleteAfterReject) {
-                $deleted = $redis->xdel($this->stream, [$id]) && $deleted;
+            $rejected = $redis->xack($this->stream, $this->group, [$id]);
+
+            // same as in ack(): the entry may already be gone from the stream, deleting it is best effort
+            if ($rejected && $this->deleteAfterReject && false === $redis->xdel($this->stream, [$id])) {
+                $redis->clearLastError();
             }
         } catch (\RedisException|\Relay\Exception $e) {
             throw new TransportException($e->getMessage(), 0, $e);
         }
 
-        if (!$deleted) {
+        if (!$rejected) {
             if ($error = $redis->getLastError() ?: null) {
                 $redis->clearLastError();
             }
-            throw new TransportException($error ?? \sprintf('Could not delete message "%s" from the redis stream.', $id));
+            throw new TransportException($error ?? \sprintf('Could not reject redis message "%s".', $id));
         }
 
         unset($this->inflightIds[$id]);

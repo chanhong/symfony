@@ -147,7 +147,7 @@ class HtmlSanitizerAllTest extends TestCase
             ],
             [
                 '<a href= onmouseover="alert(\\\'XSS\\\');">Lorem ipsum</a>',
-                '<a href="onmouseover&#61;&#34;alert(\&#039;XSS\&#039;);&#34;">Lorem ipsum</a>',
+                '<a>Lorem ipsum</a>',
             ],
             [
                 '<a href="http://trusted.com" onclick="alert(\'ok\')">Test</a>',
@@ -337,6 +337,14 @@ class HtmlSanitizerAllTest extends TestCase
             [
                 '<a href="mailto:test&#64;gmail.com" title="Link title">Lorem ipsum</a>',
                 '<a href="mailto:test&#64;gmail.com" title="Link title">Lorem ipsum</a>',
+            ],
+            [
+                '<a href="mailto:infobot@example.com?body=send%20current-issue%0D%0Asend%20index" title="Link title">Lorem ipsum</a>',
+                '<a href="mailto:infobot&#64;example.com?body&#61;send%20current-issue%0D%0Asend%20index" title="Link title">Lorem ipsum</a>',
+            ],
+            [
+                '<a href="https://trusted.com/?q=%E2%80%AD%80" title="Link title">Lorem ipsum</a>',
+                '<a title="Link title">Lorem ipsum</a>',
             ],
             [
                 '<blockquote>Lorem ipsum</blockquote>',

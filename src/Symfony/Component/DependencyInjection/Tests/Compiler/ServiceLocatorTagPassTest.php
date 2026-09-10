@@ -212,6 +212,25 @@ class ServiceLocatorTagPassTest extends TestCase
         $this->assertSame(TestDefinition2::class, $locator(1)::class);
     }
 
+    public function testNestedServiceLocatorArgument()
+    {
+        $container = new ContainerBuilder();
+
+        $container->register('bar', TestDefinition1::class)->addTag('test_tag');
+
+        $container->register('foo', ServiceLocator::class)
+            ->setArguments([['nested' => new ServiceLocatorArgument(new TaggedIteratorArgument('test_tag', null, true))]])
+            ->addTag('container.service_locator')
+        ;
+
+        (new ServiceLocatorTagPass())->process($container);
+
+        $nested = $container->get('foo')->get('nested');
+
+        $this->assertInstanceOf(ServiceLocator::class, $nested);
+        $this->assertSame(TestDefinition1::class, $nested->get('bar')::class);
+    }
+
     public function testIndexedByServiceIdWithDecoration()
     {
         $container = new ContainerBuilder();
@@ -306,6 +325,31 @@ class ServiceLocatorTagPassTest extends TestCase
         $locator = $container->get(Locator::class)->locator;
         static::assertTrue($locator->has('custom_key'));
         static::assertInstanceOf(AsTaggedItemServiceDecorator::class, $locator->get('custom_key'));
+    }
+
+    public function testExcludeSelfFromTaggedServiceLocator()
+    {
+        $container = new ContainerBuilder();
+
+        $locator = new Definition(Locator::class);
+        $locator->setPublic(true);
+        $locator->addTag('test_tag');
+        $locator->addArgument(new ServiceLocatorArgument(new TaggedIteratorArgument('test_tag', null, true)));
+
+        $container->setDefinition(Locator::class, $locator);
+
+        $service = new Definition(Service::class);
+        $service->setPublic(true);
+        $service->addTag('test_tag');
+
+        $container->setDefinition(Service::class, $service);
+
+        $container->compile();
+
+        /** @var ServiceLocator $locator */
+        $locator = $container->get(Locator::class)->locator;
+        static::assertTrue($locator->has(Service::class), 'Other tagged services should be in the locator');
+        static::assertFalse($locator->has(Locator::class), 'The service itself should be excluded via excludeSelf');
     }
 
     public function testBindingsAreProcessed()

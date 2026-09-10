@@ -135,6 +135,12 @@ class UrlGeneratorTest extends TestCase
         $nestedStdClass = new \stdClass();
         $nestedStdClass->nested = $stdClass;
 
+        $sharedLeaf = new \stdClass();
+        $sharedLeaf->baz = 'bar';
+        $sharedObject = new \stdClass();
+        $sharedObject->left = $sharedLeaf;
+        $sharedObject->right = $sharedLeaf;
+
         return [
             'null' => ['', 'foo', null],
             'string' => ['?foo=bar', 'foo', 'bar'],
@@ -149,7 +155,24 @@ class UrlGeneratorTest extends TestCase
             'non stringable object' => ['', 'foo', new NonStringableObject()],
             'non stringable object but has public property' => ['?foo%5Bfoo%5D=property', 'foo', new NonStringableObjectWithPublicProperty()],
             'numeric key' => ['?123=foo', '123', 'foo'],
+            // a shared (acyclic) reference must not be mistaken for a circular one
+            'object with a shared acyclic reference' => ['?foo%5Bleft%5D%5Bbaz%5D=bar&foo%5Bright%5D%5Bbaz%5D=bar', 'foo', $sharedObject],
         ];
+    }
+
+    public function testGenerateWithCircularObjectReference()
+    {
+        $a = new \stdClass();
+        $b = new \stdClass();
+        $a->b = $b;
+        $b->a = $a;
+
+        $routes = $this->getRoutes('test', new Route('/testing'));
+
+        $this->expectException(InvalidParameterException::class);
+        $this->expectExceptionMessage('Parameters for route "test" cannot contain a circular reference');
+
+        $this->getGenerator($routes)->generate('test', ['foo' => $a]);
     }
 
     public function testUrlWithExtraParametersFromGlobals()
@@ -366,6 +389,14 @@ class UrlGeneratorTest extends TestCase
         $this->getGenerator($routes)->generate('test', ['foo' => '0'], UrlGeneratorInterface::ABSOLUTE_URL);
     }
 
+    public function testGenerateForRouteWithAlternationRequirementRejectsSubstringMatch()
+    {
+        $routes = $this->getRoutes('test', new Route('/{_locale}/blog', [], ['_locale' => 'en|fr|vi|de']));
+
+        $this->expectException(InvalidParameterException::class);
+        $this->getGenerator($routes)->generate('test', ['_locale' => '/evil.com']);
+    }
+
     public function testGenerateForRouteWithInvalidOptionalParameterNonStrict()
     {
         $routes = $this->getRoutes('test', new Route('/testing/{foo}', ['foo' => '1'], ['foo' => 'd+']));
@@ -525,6 +556,18 @@ class UrlGeneratorTest extends TestCase
         $this->assertSame('/app.php/dir/%2E/dir/%2E', $this->getGenerator($routes)->generate('test'));
         $routes = $this->getRoutes('test', new Route('/a./.a/a../..a/...'));
         $this->assertSame('/app.php/a./.a/a../..a/...', $this->getGenerator($routes)->generate('test'));
+    }
+
+    public function testEncodingOfChainedRelativePathSegments()
+    {
+        $routes = $this->getRoutes('test', new Route('/foo/{path}/bar', [], ['path' => '.+']));
+        $this->assertSame('/app.php/foo/%2E%2E/%2E%2E/%2E%2E/bar', $this->getGenerator($routes)->generate('test', ['path' => '../../..']));
+        $this->assertSame('/app.php/foo/%2E/%2E/%2E/bar', $this->getGenerator($routes)->generate('test', ['path' => '././.']));
+        $this->assertSame('/app.php/foo/%2E%2E/%2E/%2E/%2E%2E/bar', $this->getGenerator($routes)->generate('test', ['path' => '../././..']));
+
+        $routes = $this->getRoutes('test', new Route('/foo/{path}', [], ['path' => '.+']));
+        $this->assertSame('/app.php/foo/%2E%2E/%2E%2E/%2E%2E', $this->getGenerator($routes)->generate('test', ['path' => '../../..']));
+        $this->assertSame('/app.php/foo/%2E/%2E/%2E', $this->getGenerator($routes)->generate('test', ['path' => '././.']));
     }
 
     public function testEncodingOfSlashInPath()

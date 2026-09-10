@@ -18,7 +18,7 @@ use Symfony\Bridge\PhpUnit\DeprecationErrorHandler;
 use Symfony\Bridge\PhpUnit\DeprecationErrorHandler\Deprecation;
 use Symfony\Bridge\PhpUnit\Legacy\SymfonyTestsListenerForV7;
 
-#[RequiresPhpunit('<10')]
+#[RequiresPhpunit('<10.0.0')]
 class DeprecationTest extends TestCase
 {
     private static $vendorDir;
@@ -73,6 +73,20 @@ class DeprecationTest extends TestCase
     {
         $deprecation = new Deprecation('💩', $this->debugBacktrace(), __FILE__);
         $this->assertTrue($deprecation->isLegacy('whatever'));
+    }
+
+    public function testMethodInheritedFromAnInternalClassIsNotLegacy()
+    {
+        $object = new class extends \ArrayObject {
+        };
+        $deprecation = new Deprecation('💩', [
+            [],
+            [],
+            [],
+            ['class' => \ArrayObject::class, 'function' => 'count', 'object' => $object, 'file' => __FILE__],
+        ], __FILE__);
+
+        $this->assertFalse($deprecation->isLegacy());
     }
 
     public function testItCanBeConvertedToAString()

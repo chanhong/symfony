@@ -2,6 +2,7 @@ name: Intl/Emoji data
 
 on:
   push:
+    branches: [ '*.*' ]
     paths:
       - 'src/Symfony/Component/Emoji/*.php'
       - 'src/Symfony/Component/Emoji/Resources/data/**'
@@ -40,7 +41,9 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         run: |
@@ -58,7 +61,7 @@ jobs:
           echo "SYMFONY_ICU_VERSION=$SYMFONY_ICU_VERSION" >> $GITHUB_ENV
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           coverage: "none"
           extensions: "zip,intl-${{env.SYMFONY_ICU_VERSION}}"

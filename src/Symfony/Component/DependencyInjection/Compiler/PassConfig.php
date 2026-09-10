@@ -90,6 +90,7 @@ class PassConfig
             new CheckExceptionOnInvalidReferenceBehaviorPass(),
             new InlineServiceDefinitionsPass(new AnalyzeServiceReferencesPass()),
             new AnalyzeServiceReferencesPass(),
+            new CheckFactoryBuilderCircularReferencePass(),
             new DefinitionErrorExceptionPass(),
         ]];
 
@@ -264,7 +265,7 @@ class PassConfig
      */
     private function sortPasses(array $passes): array
     {
-        if (0 === \count($passes)) {
+        if (!$passes) {
             return [];
         }
 

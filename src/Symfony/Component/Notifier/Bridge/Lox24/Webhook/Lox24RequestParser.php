@@ -11,7 +11,10 @@
 
 namespace Symfony\Component\Notifier\Bridge\Lox24\Webhook;
 
+use Symfony\Component\HttpFoundation\ChainRequestMatcher;
+use Symfony\Component\HttpFoundation\Exception\JsonException;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\RequestMatcher\IsJsonRequestMatcher;
 use Symfony\Component\HttpFoundation\RequestMatcher\MethodRequestMatcher;
 use Symfony\Component\HttpFoundation\RequestMatcherInterface;
 use Symfony\Component\RemoteEvent\Event\Sms\SmsEvent;
@@ -28,7 +31,10 @@ final class Lox24RequestParser extends AbstractRequestParser
 {
     protected function getRequestMatcher(): RequestMatcherInterface
     {
-        return new MethodRequestMatcher('POST');
+        return new ChainRequestMatcher([
+            new MethodRequestMatcher('POST'),
+            new IsJsonRequestMatcher(),
+        ]);
     }
 
     /**
@@ -36,7 +42,19 @@ final class Lox24RequestParser extends AbstractRequestParser
      */
     protected function doParse(Request $request, #[\SensitiveParameter] string $secret): SmsEvent|RemoteEvent|null
     {
-        $payload = $request->request->all() ?? [];
+        if ('' !== $secret) {
+            $provided = $request->headers->get('X-LOX24-Token');
+            if (null === $provided || !hash_equals($secret, $provided)) {
+                throw new RejectWebhookException(406, 'Invalid or missing webhook token.');
+            }
+        }
+
+        try {
+            $payload = $request->toArray();
+        } catch (JsonException) {
+            throw new RejectWebhookException(406, 'The payload must be a JSON object.');
+        }
+
         $name = $payload['name'] ?? null;
         $data = $payload['data'] ?? null;
         $id = $payload['id'] ?? null;

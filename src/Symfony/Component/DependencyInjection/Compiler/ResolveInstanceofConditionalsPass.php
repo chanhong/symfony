@@ -83,7 +83,7 @@ class ResolveInstanceofConditionalsPass implements CompilerPassInterface
                 /** @var ChildDefinition $instanceofDef */
                 $instanceofDef = clone $instanceofDef;
                 $instanceofDef->setAbstract(true)->setParent($parent ?: '.abstract.instanceof.'.$id);
-                $parent = '.instanceof.'.$interface.'.'.$key.'.'.$id;
+                $parent = '.instanceof.'.strtr($interface, "\0\r\n", '---').'.'.$key.'.'.$id;
                 $container->setDefinition($parent, $instanceofDef);
                 $instanceofTags[] = [$interface, $instanceofDef->getTags()];
                 $instanceofBindings = $instanceofDef->getBindings() + $instanceofBindings;
@@ -111,6 +111,16 @@ class ResolveInstanceofConditionalsPass implements CompilerPassInterface
 
             if (null !== $shared && !isset($definition->getChanges()['shared'])) {
                 $definition->setShared($shared);
+            }
+
+            // Tags are added from the most specific type to the least specific one
+            if (1 < \count($instanceofTags)) {
+                $depths = [];
+                foreach ($instanceofTags as [$interface]) {
+                    $depths[$interface] ??= \count(class_parents($interface) ?: []) + \count(class_implements($interface) ?: []);
+                }
+                uasort($instanceofTags, static fn ($a, $b) => $depths[$a[0]] <=> $depths[$b[0]]);
+                $instanceofTags = array_values($instanceofTags);
             }
 
             // Don't add tags to service decorators

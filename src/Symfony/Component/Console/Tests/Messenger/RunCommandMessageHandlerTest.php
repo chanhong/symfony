@@ -60,7 +60,7 @@ final class RunCommandMessageHandlerTest extends TestCase
     public function testExecutesCommandThatCatchesThrownException()
     {
         $handler = new RunCommandMessageHandler($this->createApplicationWithCommand());
-        $context = $handler(new RunCommandMessage('test:command --throw -v', throwOnFailure: false, catchExceptions: true));
+        $context = $handler(new RunCommandMessage('test:command --throw -v', false, true));
 
         $this->assertSame(1, $context->exitCode);
         $this->assertStringContainsString('[RuntimeException]', $context->output);
@@ -115,6 +115,32 @@ final class RunCommandMessageHandlerTest extends TestCase
         }
 
         $this->fail('Exception not thrown.');
+    }
+
+    public function testCatchExceptionsIsRestored()
+    {
+        $application = $this->createApplicationWithCommand();
+        $application->setCatchExceptions(true);
+
+        $handler = new RunCommandMessageHandler($application);
+        $handler(new RunCommandMessage('test:command'));
+
+        $this->assertTrue($application->areExceptionsCaught());
+    }
+
+    public function testCatchExceptionsIsRestoredWhenCommandFails()
+    {
+        $application = $this->createApplicationWithCommand();
+        $application->setCatchExceptions(true);
+
+        $handler = new RunCommandMessageHandler($application);
+
+        try {
+            $handler(new RunCommandMessage('test:command --throw'));
+        } catch (RunCommandFailedException) {
+        }
+
+        $this->assertTrue($application->areExceptionsCaught());
     }
 
     private function createApplicationWithCommand(): Application

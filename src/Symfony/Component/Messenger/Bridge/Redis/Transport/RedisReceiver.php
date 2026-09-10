@@ -44,6 +44,7 @@ class RedisReceiver implements KeepaliveReceiverInterface, MessageCountAwareInte
     {
         $fetchSize = \func_num_args() > 0 ? max(1, func_get_arg(0)) : 1;
 
+        retry:
         if (null === $messages = $this->connection->get($fetchSize)) {
             return [];
         }
@@ -66,7 +67,7 @@ class RedisReceiver implements KeepaliveReceiverInterface, MessageCountAwareInte
                 continue;
             }
 
-            if (null === $redisEnvelope = json_decode($message['data']['message'] ?? '', true)) {
+            if (!\is_array($redisEnvelope = json_decode($message['data']['message'] ?? '', true))) {
                 continue;
             }
 
@@ -94,7 +95,7 @@ class RedisReceiver implements KeepaliveReceiverInterface, MessageCountAwareInte
         }
 
         if (!$envelopes && $shouldRetry) {
-            return $this->get($fetchSize);
+            goto retry;
         }
 
         return $envelopes;
@@ -146,7 +147,7 @@ class RedisReceiver implements KeepaliveReceiverInterface, MessageCountAwareInte
             return null;
         }
 
-        if (null === $redisEnvelope = json_decode($json, true)) {
+        if (!\is_array($redisEnvelope = json_decode($json, true))) {
             return null;
         }
 

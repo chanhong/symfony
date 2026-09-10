@@ -68,6 +68,8 @@ class QuestionHelper extends Helper
         $inputStream = $input instanceof StreamableInputInterface ? $input->getStream() : null;
         $inputStream ??= \STDIN;
 
+        ProgressBar::pauseAll();
+
         try {
             if (!$question->getValidator() && !$question->getConstraints()) {
                 return $this->doAsk($inputStream, $output, $question);
@@ -84,6 +86,8 @@ class QuestionHelper extends Helper
             }
 
             return $fallbackOutput;
+        } finally {
+            ProgressBar::resumeAll();
         }
     }
 
@@ -251,8 +255,10 @@ class QuestionHelper extends Helper
     /**
      * Autocompletes a question.
      *
-     * @param resource                  $inputStream
-     * @param callable(string):string[] $autocomplete
+     * @param resource                      $inputStream
+     * @param callable(string):list<string> $autocomplete
+     *
+     * @param-immediately-invoked-callable $autocomplete
      */
     private function autocomplete(OutputInterface $output, Question $question, $inputStream, callable $autocomplete): string
     {
@@ -304,6 +310,18 @@ class QuestionHelper extends Helper
             } elseif ("\033" === $c) {
                 // Did we read an escape sequence?
                 $c .= fread($inputStream, 2);
+
+                // A CSI sequence ends with a byte in the 0x40-0x7E range, preceded by any number of
+                // parameter and intermediate bytes; consume them all so that none leaks into the answer
+                if ('[' === ($c[1] ?? '')) {
+                    while (($o = \ord($c[\strlen($c) - 1])) >= 0x20 && $o <= 0x3F) {
+                        if (!$next = fread($inputStream, 1)) {
+                            break;
+                        }
+
+                        $c .= $next;
+                    }
+                }
 
                 // A = Up Arrow. B = Down Arrow
                 if (isset($c[2]) && ('A' === $c[2] || 'B' === $c[2])) {
@@ -415,7 +433,7 @@ class QuestionHelper extends Helper
      */
     private function getHiddenResponse(OutputInterface $output, $inputStream, bool $trimmable = true): string
     {
-        if ('\\' === \DIRECTORY_SEPARATOR) {
+        if ('\\' === \DIRECTORY_SEPARATOR && $this->isInteractiveInput($inputStream)) {
             $exe = __DIR__.'/../Resources/bin/hiddeninput.exe';
 
             // handle code running from a phar
@@ -425,7 +443,7 @@ class QuestionHelper extends Helper
                 $exe = $tmpExe;
             }
 
-            $sExec = shell_exec('"'.$exe.'"');
+            $sExec = (string) shell_exec('"'.$exe.'"');
             $value = $trimmable ? rtrim($sExec) : $sExec;
             $output->writeln('');
 
@@ -467,6 +485,8 @@ class QuestionHelper extends Helper
      * Validates an attempt.
      *
      * @param callable $interviewer A callable that will ask for a question and return the result
+     *
+     * @param-immediately-invoked-callable $interviewer
      *
      * @throws \Exception In case the max number of attempts has been reached and no valid response has been given
      */

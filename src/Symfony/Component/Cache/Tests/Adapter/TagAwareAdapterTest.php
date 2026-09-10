@@ -80,6 +80,23 @@ class TagAwareAdapterTest extends AdapterTestCase
         $this->assertFalse($pool->getItem('foo')->isHit()); // known tag version has expired
     }
 
+    public function testGetItemsWithNumericStringKeys()
+    {
+        $adapter = new TagAwareAdapter(new ArrayAdapter());
+
+        $item = $adapter->getItem('123');
+        $item->set('foo-val');
+        $adapter->save($item);
+
+        $keys = [];
+        foreach ($adapter->getItems(['123', '456']) as $key => $item) {
+            $keys[] = $key;
+            $this->assertSame($key, $item->getKey());
+        }
+
+        $this->assertSame(['123', '456'], $keys);
+    }
+
     public function testInvalidateTagsWithArrayAdapter()
     {
         $adapter = new TagAwareAdapter(new ArrayAdapter());
@@ -216,5 +233,30 @@ class TagAwareAdapterTest extends AdapterTestCase
         foreach ($pool->getItems([$itemKey1, $itemKey2]) as $item) {
             // run generator
         }
+    }
+
+    public function testResetClearsInternalStateEvenOnCommitFailure()
+    {
+        $pool = new class extends ArrayAdapter {
+            public function commit(): bool
+            {
+                return false;
+            }
+        };
+
+        $adapter = new TagAwareAdapter($pool);
+        $item = $adapter->getItem('foo');
+        $item->set('bar');
+        $adapter->saveDeferred($item);
+
+        // Simulate some known tag versions
+        $propertyTags = new \ReflectionProperty($adapter, 'knownTagVersions');
+        $propertyTags->setValue($adapter, ['tag1' => 1]);
+
+        $adapter->reset();
+
+        $propertyDeferred = new \ReflectionProperty($adapter, 'deferred');
+        $this->assertEmpty($propertyDeferred->getValue($adapter), 'The deferred items must be cleared even if commit fails.');
+        $this->assertEmpty($propertyTags->getValue($adapter), 'The known tag versions must be cleared even if commit fails.');
     }
 }

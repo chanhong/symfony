@@ -15,7 +15,6 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Yaml\Dumper;
 use Symfony\Component\Yaml\Exception\DumpException;
-use Symfony\Component\Yaml\Exception\ParseException;
 use Symfony\Component\Yaml\Parser;
 use Symfony\Component\Yaml\Tag\TaggedValue;
 use Symfony\Component\Yaml\Yaml;
@@ -62,11 +61,12 @@ class DumperTest extends TestCase
         $expected = <<<'EOF'
             '': bar
             foo: '#bar'
-            "foo'bar": {  }
+            "foo'bar": {}
             bar:
                    - 1
                    - foo
-                   - a: A
+                   -
+                          a: A
             foobar:
                    foo: bar
                    bar:
@@ -111,23 +111,31 @@ class DumperTest extends TestCase
         }
     }
 
-    public function testDumpSimpleHashesInSequencesCompactly()
+    public function testDumpSimpleHashesInSequences()
     {
         $data = ['servers' => [['url' => 'http://example.com']]];
-        $expected = "servers:\n    - url: 'http://example.com'\n";
+        $expected = "servers:\n    -\n        url: 'http://example.com'\n";
         $this->assertSame($expected, $this->dumper->dump($data, 3));
         $this->assertSameData($data, $this->parser->parse($expected));
 
+        $expected = "servers:\n    - url: 'http://example.com'\n";
+        $this->assertSame($expected, $this->dumper->dump($data, 3, 0, Yaml::DUMP_COMPACT_NESTED_MAPPING));
+        $this->assertSameData($data, $this->parser->parse($expected));
+
         $data = ['servers' => [['url' => 'http://example.com', 'port' => 80]]];
-        $expected = "servers:\n    - url: 'http://example.com'\n      port: 80\n";
+        $expected = "servers:\n    -\n        url: 'http://example.com'\n        port: 80\n";
         $this->assertSame($expected, $this->dumper->dump($data, 3));
+        $this->assertSameData($data, $this->parser->parse($expected));
+
+        $expected = "servers:\n    - url: 'http://example.com'\n      port: 80\n";
+        $this->assertSame($expected, $this->dumper->dump($data, 3, 0, Yaml::DUMP_COMPACT_NESTED_MAPPING));
         $this->assertSameData($data, $this->parser->parse($expected));
     }
 
     public function testInlineLevel()
     {
         $expected = <<<'EOF'
-            { '': bar, foo: '#bar', "foo'bar": {  }, bar: [1, foo, { a: A }], foobar: { foo: bar, bar: [1, foo], foobar: { foo: bar, bar: [1, foo] } } }
+            { '': bar, foo: '#bar', "foo'bar": {}, bar: [1, foo, { a: A }], foobar: { foo: bar, bar: [1, foo], foobar: { foo: bar, bar: [1, foo] } } }
             EOF;
         $this->assertSame($expected, $this->dumper->dump($this->array, -10), '->dump() takes an inline level argument');
         $this->assertSame($expected, $this->dumper->dump($this->array, 0), '->dump() takes an inline level argument');
@@ -136,7 +144,7 @@ class DumperTest extends TestCase
         $expected = <<<'EOF'
             '': bar
             foo: '#bar'
-            "foo'bar": {  }
+            "foo'bar": {}
             bar: [1, foo, { a: A }]
             foobar: { foo: bar, bar: [1, foo], foobar: { foo: bar, bar: [1, foo] } }
 
@@ -147,7 +155,7 @@ class DumperTest extends TestCase
         $expected = <<<'EOF'
             '': bar
             foo: '#bar'
-            "foo'bar": {  }
+            "foo'bar": {}
             bar:
                 - 1
                 - foo
@@ -164,11 +172,12 @@ class DumperTest extends TestCase
         $expected = <<<'EOF'
             '': bar
             foo: '#bar'
-            "foo'bar": {  }
+            "foo'bar": {}
             bar:
                 - 1
                 - foo
-                - a: A
+                -
+                    a: A
             foobar:
                 foo: bar
                 bar:
@@ -185,11 +194,12 @@ class DumperTest extends TestCase
         $expected = <<<'EOF'
             '': bar
             foo: '#bar'
-            "foo'bar": {  }
+            "foo'bar": {}
             bar:
                 - 1
                 - foo
-                - a: A
+                -
+                    a: A
             foobar:
                 foo: bar
                 bar:
@@ -419,12 +429,12 @@ class DumperTest extends TestCase
 
     public function testDumpEmptyArrayObjectInstanceAsMap()
     {
-        $this->assertSame('{  }', $this->dumper->dump(new \ArrayObject(), 2, 0, Yaml::DUMP_OBJECT_AS_MAP));
+        $this->assertSame('{}', $this->dumper->dump(new \ArrayObject(), 2, 0, Yaml::DUMP_OBJECT_AS_MAP));
     }
 
     public function testDumpEmptyStdClassInstanceAsMap()
     {
-        $this->assertSame('{  }', $this->dumper->dump(new \stdClass(), 2, 0, Yaml::DUMP_OBJECT_AS_MAP));
+        $this->assertSame('{}', $this->dumper->dump(new \stdClass(), 2, 0, Yaml::DUMP_OBJECT_AS_MAP));
     }
 
     public function testDumpingStdClassInstancesRespectsInlineLevel()
@@ -668,12 +678,7 @@ class DumperTest extends TestCase
         ];
         $expected = "- !bar |-\n    a\n    b";
         $this->assertSame($expected, $this->dumper->dump($data, 2, 0, Yaml::DUMP_MULTI_LINE_LITERAL_BLOCK));
-
-        // @todo Fix the parser, eliminate these exceptions.
-        $this->expectException(ParseException::class);
-        $this->expectExceptionMessage('Unable to parse at line 3 (near "!bar |-").');
-
-        $this->parser->parse($expected, Yaml::PARSE_CUSTOM_TAGS);
+        $this->assertSameData($data, $this->parser->parse($expected, Yaml::PARSE_CUSTOM_TAGS));
     }
 
     public function testDumpingTaggedMultiLineTrailingNewlinesInMap()
@@ -685,11 +690,7 @@ class DumperTest extends TestCase
         $this->assertSame($expected, $this->dumper->dump($data, 2, 0, Yaml::DUMP_MULTI_LINE_LITERAL_BLOCK));
 
         // @todo Fix the parser, the result should be identical to $data.
-        $this->assertSameData(
-            [
-                'foo' => new TaggedValue('bar', "a\nb\n\n\n"),
-            ],
-            $this->parser->parse($expected, Yaml::PARSE_CUSTOM_TAGS));
+        $this->assertSameData(['foo' => new TaggedValue('bar', "a\nb\n\n\n")], $this->parser->parse($expected, Yaml::PARSE_CUSTOM_TAGS));
     }
 
     public function testDumpingTaggedMultiLineTrailingNewlinesInList()
@@ -700,11 +701,7 @@ class DumperTest extends TestCase
         $expected = "- !bar |+\n    a\n    b\n\n\n";
         $this->assertSame($expected, $this->dumper->dump($data, 2, 0, Yaml::DUMP_MULTI_LINE_LITERAL_BLOCK));
 
-        // @todo Fix the parser, eliminate these exceptions.
-        $this->expectException(ParseException::class);
-        $this->expectExceptionMessage('Unable to parse at line 6 (near "!bar |+").');
-
-        $this->parser->parse($expected, Yaml::PARSE_CUSTOM_TAGS);
+        $this->assertSameData($data, $this->parser->parse($expected, Yaml::PARSE_CUSTOM_TAGS));
     }
 
     public function testDumpingInlinedMultiLineIfRnBreakLineInTaggedValue()
@@ -1244,7 +1241,7 @@ class DumperTest extends TestCase
                       value: 0
                     -
                      -
-                      - {  }
+                      - {}
                  - name: Jupiter
                    distance: 778500000
                    properties:
@@ -1253,7 +1250,7 @@ class DumperTest extends TestCase
                     - name: moons
                       value: 79
                     -
-                     - {  }
+                     - {}
 
                 YAML,
             1,
@@ -1272,7 +1269,7 @@ class DumperTest extends TestCase
                         value: 0
                       -
                         -
-                          - {  }
+                          - {}
                   - name: Jupiter
                     distance: 778500000
                     properties:
@@ -1281,7 +1278,7 @@ class DumperTest extends TestCase
                       - name: moons
                         value: 79
                       -
-                        - {  }
+                        - {}
 
                 YAML,
             2,
@@ -1300,7 +1297,7 @@ class DumperTest extends TestCase
                           value: 0
                         -
                            -
-                              - {  }
+                              - {}
                    - name: Jupiter
                      distance: 778500000
                      properties:
@@ -1309,7 +1306,7 @@ class DumperTest extends TestCase
                         - name: moons
                           value: 79
                         -
-                           - {  }
+                           - {}
 
                 YAML,
             3,
@@ -1328,7 +1325,7 @@ class DumperTest extends TestCase
                             value: 0
                           -
                               -
-                                  - {  }
+                                  - {}
                     - name: Jupiter
                       distance: 778500000
                       properties:
@@ -1337,7 +1334,7 @@ class DumperTest extends TestCase
                           - name: moons
                             value: 79
                           -
-                              - {  }
+                              - {}
 
                 YAML,
             4,
@@ -1352,13 +1349,13 @@ class DumperTest extends TestCase
                     properties:
                       - { name: size, value: 4879 }
                       - { name: moons, value: 0 }
-                      - [[{  }]]
+                      - [[{}]]
                   - name: Jupiter
                     distance: 778500000
                     properties:
                       - { name: size, value: 139820 }
                       - { name: moons, value: 79 }
-                      - [{  }]
+                      - [{}]
 
                 YAML,
             2,

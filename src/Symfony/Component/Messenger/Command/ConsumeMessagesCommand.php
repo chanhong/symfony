@@ -32,7 +32,6 @@ use Symfony\Component\Messenger\EventListener\ResetServicesListener;
 use Symfony\Component\Messenger\EventListener\StopWorkerOnFailureLimitListener;
 use Symfony\Component\Messenger\EventListener\StopWorkerOnMemoryLimitListener;
 use Symfony\Component\Messenger\EventListener\StopWorkerOnMessageLimitListener;
-use Symfony\Component\Messenger\EventListener\StopWorkerOnTimeLimitListener;
 use Symfony\Component\Messenger\RoutableMessageBus;
 use Symfony\Component\Messenger\Transport\Sync\SyncTransport;
 use Symfony\Component\Messenger\Worker;
@@ -181,10 +180,6 @@ class ConsumeMessagesCommand extends Command implements SignalableCommandInterfa
 
             $input->setArgument('receivers', $io->askQuestion($question));
         }
-
-        if (!$input->getArgument('receivers')) {
-            throw new RuntimeException('Please pass at least one receiver.');
-        }
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -204,6 +199,10 @@ class ConsumeMessagesCommand extends Command implements SignalableCommandInterfa
             }
             $receiverNames = $receiverNames ?: $input->getArgument('receivers');
             $receiverNames = array_unique($receiverNames);
+        }
+
+        if (!$receiverNames) {
+            throw new RuntimeException('Please pass at least one receiver.');
         }
 
         if ($input->getOption('all') && $excludedTransports = $input->getOption('exclude-receivers')) {
@@ -248,9 +247,10 @@ class ConsumeMessagesCommand extends Command implements SignalableCommandInterfa
             throw new InvalidOptionException(\sprintf('Option "no-reset" must be a positive integer, "%s" passed.', $input->getOption('no-reset')));
         }
 
+        $subscribers = [];
         $this->resetServicesListener?->setInterval($resetInterval > 0 ? $resetInterval : 1);
         if ($this->resetServicesListener && $resetInterval > 0) {
-            $this->eventDispatcher->addSubscriber($this->resetServicesListener);
+            $subscribers[] = $this->resetServicesListener;
         }
 
         $stopsWhen = [];
@@ -260,17 +260,17 @@ class ConsumeMessagesCommand extends Command implements SignalableCommandInterfa
             }
 
             $stopsWhen[] = "processed {$limit} messages";
-            $this->eventDispatcher->addSubscriber(new StopWorkerOnMessageLimitListener($limit, $this->logger));
+            $subscribers[] = new StopWorkerOnMessageLimitListener($limit, $this->logger);
         }
 
         if ($failureLimit = $input->getOption('failure-limit')) {
             $stopsWhen[] = "reached {$failureLimit} failed messages";
-            $this->eventDispatcher->addSubscriber(new StopWorkerOnFailureLimitListener($failureLimit, $this->logger));
+            $subscribers[] = new StopWorkerOnFailureLimitListener($failureLimit, $this->logger);
         }
 
         if ($memoryLimit = $input->getOption('memory-limit')) {
             $stopsWhen[] = "exceeded {$memoryLimit} of memory";
-            $this->eventDispatcher->addSubscriber(new StopWorkerOnMemoryLimitListener($this->convertToBytes($memoryLimit), $this->logger));
+            $subscribers[] = new StopWorkerOnMemoryLimitListener($this->convertToBytes($memoryLimit), $this->logger);
         }
 
         if (null !== $timeLimit = $input->getOption('time-limit')) {
@@ -279,7 +279,6 @@ class ConsumeMessagesCommand extends Command implements SignalableCommandInterfa
             }
 
             $stopsWhen[] = "been running for {$timeLimit}s";
-            $this->eventDispatcher->addSubscriber(new StopWorkerOnTimeLimitListener($timeLimit, $this->logger));
         }
 
         $stopsWhen[] = 'received a stop signal via the messenger:stop-workers command';
@@ -305,24 +304,30 @@ class ConsumeMessagesCommand extends Command implements SignalableCommandInterfa
         $this->worker = new Worker($receivers, $bus, $this->eventDispatcher, $this->logger, $rateLimiters);
         $options = [
             'sleep' => $input->getOption('sleep') * 1000000,
+            'time_limit' => null !== $timeLimit ? (int) $timeLimit : null,
         ];
-        if (null !== $timeLimit) {
-            $options['time_limit'] = (int) $timeLimit;
-        }
         if ($queues = $input->getOption('queues')) {
             $options['queues'] = $queues;
         }
 
-        if (1 < $fetchSize = (int) $input->getOption('fetch-size')) {
+        if (1 > $fetchSize = (int) $input->getOption('fetch-size')) {
             throw new \InvalidArgumentException(\sprintf('The "--fetch-size" option must be a positive integer, "%s" given.', $input->getOption('fetch-size')));
         }
 
         $options['fetch_size'] = $fetchSize;
 
+        foreach ($subscribers as $subscriber) {
+            $this->eventDispatcher->addSubscriber($subscriber);
+        }
+
         try {
             $this->worker->run($options);
         } finally {
             $this->worker = null;
+
+            foreach ($subscribers as $subscriber) {
+                $this->eventDispatcher->removeSubscriber($subscriber);
+            }
         }
 
         return 0;

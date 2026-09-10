@@ -74,6 +74,25 @@ class DateTypeTest extends BaseTypeTestCase
         $this->assertEquals('2010-06-02', $form->getViewData());
     }
 
+    public function testSubmitFromSingleTextDateTimeBeforeTheGregorianCutover()
+    {
+        if (4 === \PHP_INT_SIZE) {
+            $this->markTestSkipped('Dates before 1582 do not fit in a 32 bit timestamp.');
+        }
+
+        $form = $this->factory->create(static::TESTED_TYPE, null, [
+            'model_timezone' => 'UTC',
+            'view_timezone' => 'UTC',
+            'widget' => 'single_text',
+            'input' => 'datetime',
+        ]);
+
+        $form->submit('1582-01-01');
+
+        $this->assertEquals(new \DateTime('1582-01-01 UTC'), $form->getData());
+        $this->assertSame('1582-01-01', $form->getViewData());
+    }
+
     public function testSubmitFromSingleTextDateTimeWithCustomFormat()
     {
         $form = $this->factory->create(static::TESTED_TYPE, null, [
@@ -1172,11 +1191,11 @@ class DateTypeTest extends BaseTypeTestCase
 
         // Creates a new form using the "roc" (Republic Of China) calendar. This calendar starts in 1912, the year 2024 in
         // the Gregorian calendar is the year 113 in the "roc" calendar.
-        $form = $this->factory->create(static::TESTED_TYPE, options: [
+        $form = $this->factory->create(static::TESTED_TYPE, null, [
             'format' => 'y-MM-dd',
             'html5' => false,
             'input' => 'array',
-            'calendar' => \IntlCalendar::createInstance(locale: 'zh_TW@calendar=roc'),
+            'calendar' => \IntlCalendar::createInstance(null, 'zh_TW@calendar=roc'),
         ]);
         $form->submit('113-03-31');
 
@@ -1193,11 +1212,11 @@ class DateTypeTest extends BaseTypeTestCase
 
         // Creates a new form using the "roc" (Republic Of China) calendar. This calendar starts in 1912, the year 2024 in
         // the Gregorian calendar is the year 113 in the "roc" calendar.
-        $form = $this->factory->create(static::TESTED_TYPE, options: [
+        $form = $this->factory->create(static::TESTED_TYPE, null, [
             'format' => 'y-MM-dd',
             'html5' => false,
             'input' => 'array',
-            'calendar' => \IntlCalendar::createInstance(locale: 'zh_TW@calendar=roc'),
+            'calendar' => \IntlCalendar::createInstance(null, 'zh_TW@calendar=roc'),
         ]);
         $form->setData(['year' => '2024', 'month' => '3', 'day' => '31']);
 
@@ -1235,6 +1254,49 @@ class DateTypeTest extends BaseTypeTestCase
         $this->assertSame('Year label', $view['year']->vars['label']);
         $this->assertNull($view['month']->vars['label']);
         $this->assertSame('Day label', $view['day']->vars['label']);
+    }
+
+    #[DataProvider('provideUtcEquivalentTimezones')]
+    public function testUtcEquivalentTimezoneIsAccepted(string $input, \DateTimeInterface $date, string $modelTimezone)
+    {
+        $form = $this->factory->create(static::TESTED_TYPE, $date, [
+            'widget' => 'choice',
+            'input' => $input,
+            'model_timezone' => $modelTimezone,
+        ]);
+
+        $this->assertEquals($date, $form->getData());
+    }
+
+    public static function provideUtcEquivalentTimezones()
+    {
+        return [
+            'DateTime in +00:00 with UTC model timezone' => ['datetime', new \DateTime('2024-10-28 15:00:00', new \DateTimeZone('+00:00')), 'UTC'],
+            'DateTimeImmutable in +00:00 with UTC model timezone' => ['datetime_immutable', new \DateTimeImmutable('2024-10-28 15:00:00', new \DateTimeZone('+00:00')), 'UTC'],
+            'DateTime in Z with UTC model timezone' => ['datetime', new \DateTime('2024-10-28T15:00:00Z'), 'UTC'],
+            'DateTime in GMT with UTC model timezone' => ['datetime', new \DateTime('2024-10-28 15:00:00', new \DateTimeZone('GMT')), 'UTC'],
+            'DateTime in Etc/UTC with UTC model timezone' => ['datetime', new \DateTime('2024-10-28 15:00:00', new \DateTimeZone('Etc/UTC')), 'UTC'],
+            'DateTime in UTC with +00:00 model timezone' => ['datetime', new \DateTime('2024-10-28 15:00:00', new \DateTimeZone('UTC')), '+00:00'],
+        ];
+    }
+
+    #[DataProvider('provideZeroOffsetRegionalTimezones')]
+    public function testZeroOffsetRegionalTimezoneIsRejected(string $timezone)
+    {
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage(\sprintf('Using a "DateTime" instance with a timezone ("%s") not matching the configured model timezone "UTC" is not supported.', $timezone));
+
+        $this->factory->create(static::TESTED_TYPE, new \DateTime('2024-10-28 15:00:00', new \DateTimeZone($timezone)), [
+            'model_timezone' => 'UTC',
+        ]);
+    }
+
+    public static function provideZeroOffsetRegionalTimezones()
+    {
+        return [
+            'Europe/London on a winter date' => ['Europe/London'],
+            'Africa/Abidjan' => ['Africa/Abidjan'],
+        ];
     }
 
     protected function getTestOptions(): array

@@ -12,7 +12,10 @@
 namespace Symfony\Component\VarDumper\Tests\Dumper;
 
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\TestWith;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\Process\Process;
+use Symfony\Component\VarDumper\Caster\ClassDumpStub;
 use Symfony\Component\VarDumper\Caster\ClassStub;
 use Symfony\Component\VarDumper\Caster\CutStub;
 use Symfony\Component\VarDumper\Cloner\Data;
@@ -21,6 +24,7 @@ use Symfony\Component\VarDumper\Cloner\VarCloner;
 use Symfony\Component\VarDumper\Dumper\AbstractDumper;
 use Symfony\Component\VarDumper\Dumper\CliDumper;
 use Symfony\Component\VarDumper\Test\VarDumperTestTrait;
+use Symfony\Component\VarDumper\Tests\Fixtures\ClassStringFixture;
 use Symfony\Component\VarDumper\Tests\Fixtures\VirtualProperty;
 use Twig\Environment;
 use Twig\Loader\FilesystemLoader;
@@ -31,6 +35,13 @@ use Twig\Loader\FilesystemLoader;
 class CliDumperTest extends TestCase
 {
     use VarDumperTestTrait;
+
+    public function testC1ControlCharsAreEscaped()
+    {
+        $this->assertDumpEquals('"a\u{9B}b"', "a\u{9B}b");
+        $this->assertDumpEquals('"\e\u{9B}\u{80}"', "\e\u{9B}\u{80}");
+        $this->assertDumpEquals('"\u{A0}é"', "\u{A0}\u{E9}");
+    }
 
     public function testGet()
     {
@@ -313,6 +324,46 @@ class CliDumperTest extends TestCase
         );
     }
 
+    #[TestWith(['stdClass'])]
+    #[TestWith(['locale'])]
+    #[TestWith(['FFI\CType'])]
+    public function testBuiltInClassString($classString)
+    {
+        $this->assertDumpMatchesFormat('"'.$classString.'"', $classString);
+    }
+
+    public function testClassString()
+    {
+        class_exists(ClassStringFixture::class);
+        $this->assertDumpMatchesFormat(<<<'EODUMP'
+            Symfony\Component\VarDumper\Tests\Fixtures\ClassStringFixture {
+            %A+publicStatic (static): "public value"
+            %A#protectedStatic (static): 42
+            %A-privateStatic (static): true
+            %A+notInitialized (static): ? string
+            %A}
+            EODUMP,
+            ClassStringFixture::class
+        );
+    }
+
+    public function testClassDumpStubNested()
+    {
+        class_exists(ClassStringFixture::class);
+        $this->assertDumpMatchesFormat(<<<'EODUMP'
+            array:1 [
+              "foo" => Symfony\Component\VarDumper\Tests\Fixtures\ClassStringFixture {
+            %A+publicStatic (static): "public value"
+            %A#protectedStatic (static): 42
+            %A-privateStatic (static): true
+            %A+notInitialized (static): ? string
+            %A}
+            ]
+            EODUMP,
+            ['foo' => new ClassDumpStub(ClassStringFixture::class)]
+        );
+    }
+
     public function testThrowingCaster()
     {
         $out = fopen('php://memory', 'r+');
@@ -358,7 +409,7 @@ class CliDumperTest extends TestCase
                         › 
                       }
                       %A%eTemplate.php:%d { …}
-                      %s%eTests%eDumper%eCliDumperTest.php:%d { …}
+                      %A%eCliDumperTest.php:%d { …}
                 %A  }
                   }
                 %Awrapper_type: "PHP"
@@ -527,5 +578,22 @@ class CliDumperTest extends TestCase
                 $_ENV['SYMFONY_IDE'] = $ide;
             }
         }
+    }
+
+    public function testColorsOnTerminalWhenDumpingToPhpOutput()
+    {
+        if (!Process::isPtySupported()) {
+            $this->markTestSkipped('PTY is not supported.');
+        }
+
+        $process = new Process([\PHP_BINARY, __DIR__.'/../Fixtures/dump_colors.php'], null, [
+            'COMPONENT_ROOT' => __DIR__.'/../../',
+            'TERM' => 'xterm-256color',
+            'NO_COLOR' => false,
+        ]);
+        $process->setPty(true);
+        $process->mustRun();
+
+        $this->assertSame('tty=true colors=true', trim($process->getOutput()));
     }
 }

@@ -1051,11 +1051,68 @@ class FinderTest extends Iterator\RealIteratorTestCase
             ['x/x', 'exclude_filter', true], // from CustomFilterIterator::accept() (regular filter)
             ['x/x', 'list_dir_open', ['d']],
             ['x/x/d', 'is_dir', true],
-            ['x/x/d', 'exclude_filter', true],
+            ['x/x/d', 'exclude_filter', true], // from ExcludeDirectoryFilterIterator::accept() (prune directory filter)
+            ['x/x/d', 'exclude_filter', true], // from CustomFilterIterator::accept() (regular filter)
             ['x/x/d', 'list_dir_open', ['u2.php']],
             ['x/x/d/u2.php', 'is_dir', false],
             ['x/x/d/u2.php', 'exclude_filter', true],
         ], $this->vfsLog);
+    }
+
+    public function testFilterPruneNestedDirectory()
+    {
+        $this->setupVfsProvider([
+            'x' => [
+                'a.php' => '',
+                'n' => [
+                    'd' => [
+                        'u.php' => '',
+                    ],
+                    'z.php' => '',
+                ],
+            ],
+        ]);
+
+        $finder = $this->buildFinder();
+        $finder
+            ->in($this->vfsScheme.'://x')
+            ->filter(static fn (\SplFileInfo $file): bool => 'd' !== $file->getFilename(), true);
+
+        $this->assertSameVfsIterator([
+            'x/a.php',
+            'x/n',
+            'x/n/z.php',
+        ], $finder->getIterator());
+    }
+
+    public function testFilterPruneWithExcludedPath()
+    {
+        $this->setupVfsProvider([
+            'x' => [
+                'a.php' => '',
+                'd' => [
+                    'u.php' => '',
+                ],
+                'g' => [
+                    'h' => [
+                        'v.php' => '',
+                    ],
+                    'w.php' => '',
+                ],
+            ],
+        ]);
+
+        $finder = $this->buildFinder();
+        $finder
+            ->in($this->vfsScheme.'://x')
+            ->exclude('g/h')
+            ->filter(static fn (\SplFileInfo $file): bool => 'd' !== $file->getFilename(), true);
+
+        $this->assertSameVfsIterator([
+            'x/a.php',
+            'x/g',
+            'x/g/w.php',
+        ], $finder->getIterator());
     }
 
     public function testFollowLinks()
@@ -1089,16 +1146,24 @@ class FinderTest extends Iterator\RealIteratorTestCase
 
     public function testUseUnixPaths()
     {
-        $fixturesDirectory = __DIR__.\DIRECTORY_SEPARATOR.'Fixtures';
-
-        // Fix __DIR__ on Windows giving us backslashes.
-        $fixturesDirectory = str_replace('\\', '/', $fixturesDirectory);
+        $fixturesDirectory = str_replace('\\', '/', __DIR__.\DIRECTORY_SEPARATOR.'Fixtures');
 
         $finder = $this->buildFinder();
         $this->assertSame($finder, $finder->useUnixPaths());
+
+        $sawSubdirectoryEntry = false;
         foreach ($finder->in($fixturesDirectory) as $file) {
-            $this->assertStringNotContainsString('\\', $file->getPathname(), 'Paths should be in UNIX style.');
+            $this->assertStringNotContainsString('\\', $file->getPathname(), 'getPathname() should use forward slashes.');
+            $this->assertStringNotContainsString('\\', $file->getPath(), 'getPath() should use forward slashes.');
+            $this->assertStringNotContainsString('\\', $file->getRelativePath(), 'getRelativePath() should use forward slashes.');
+            $this->assertStringNotContainsString('\\', $file->getRelativePathname(), 'getRelativePathname() should use forward slashes.');
+
+            if ('' !== $file->getRelativePath()) {
+                $sawSubdirectoryEntry = true;
+            }
         }
+
+        $this->assertTrue($sawSubdirectoryEntry, 'The Fixtures directory should yield at least one entry inside a subdirectory.');
     }
 
     public function testIn()
@@ -1383,26 +1448,22 @@ class FinderTest extends Iterator\RealIteratorTestCase
         $finder->append(Finder::create()->in($dir.'a'));
 
         $expected = [
-            ['key' => $dir.'a'.\DIRECTORY_SEPARATOR.'a1', 'relativePathname' => 'a1'],
-            ['key' => $dir.'a'.\DIRECTORY_SEPARATOR.'a2', 'relativePathname' => 'a2'],
-            ['key' => $dir.'a'.\DIRECTORY_SEPARATOR.'b', 'relativePathname' => 'b'],
+            ['key' => $dir.'a/a1', 'relativePathname' => 'a1'],
+            ['key' => $dir.'a/a2', 'relativePathname' => 'a2'],
+            ['key' => $dir.'a/b', 'relativePathname' => 'b'],
             ['key' => $dir.'a/b'.\DIRECTORY_SEPARATOR.'b1', 'relativePathname' => 'b1'],
-            ['key' => $dir.'a'.\DIRECTORY_SEPARATOR.'b'.\DIRECTORY_SEPARATOR.'b1', 'relativePathname' => 'b'.\DIRECTORY_SEPARATOR.'b1'],
+            ['key' => $dir.'a/b'.\DIRECTORY_SEPARATOR.'b1', 'relativePathname' => 'b'.\DIRECTORY_SEPARATOR.'b1'],
             ['key' => $dir.'a/b'.\DIRECTORY_SEPARATOR.'b2', 'relativePathname' => 'b2'],
-            ['key' => $dir.'a'.\DIRECTORY_SEPARATOR.'b'.\DIRECTORY_SEPARATOR.'b2', 'relativePathname' => 'b'.\DIRECTORY_SEPARATOR.'b2'],
+            ['key' => $dir.'a/b'.\DIRECTORY_SEPARATOR.'b2', 'relativePathname' => 'b'.\DIRECTORY_SEPARATOR.'b2'],
             ['key' => $dir.'a/b'.\DIRECTORY_SEPARATOR.'c', 'relativePathname' => 'c'],
-            ['key' => $dir.'a'.\DIRECTORY_SEPARATOR.'b'.\DIRECTORY_SEPARATOR.'c', 'relativePathname' => 'b'.\DIRECTORY_SEPARATOR.'c'],
+            ['key' => $dir.'a/b'.\DIRECTORY_SEPARATOR.'c', 'relativePathname' => 'b'.\DIRECTORY_SEPARATOR.'c'],
             ['key' => $dir.'a/b'.\DIRECTORY_SEPARATOR.'c'.\DIRECTORY_SEPARATOR.'c1', 'relativePathname' => 'c'.\DIRECTORY_SEPARATOR.'c1'],
-            ['key' => $dir.'a'.\DIRECTORY_SEPARATOR.'b'.\DIRECTORY_SEPARATOR.'c'.\DIRECTORY_SEPARATOR.'c1', 'relativePathname' => 'b'.\DIRECTORY_SEPARATOR.'c'.\DIRECTORY_SEPARATOR.'c1'],
+            ['key' => $dir.'a/b'.\DIRECTORY_SEPARATOR.'c'.\DIRECTORY_SEPARATOR.'c1', 'relativePathname' => 'b'.\DIRECTORY_SEPARATOR.'c'.\DIRECTORY_SEPARATOR.'c1'],
             ['key' => $dir.'a/b'.\DIRECTORY_SEPARATOR.'c'.\DIRECTORY_SEPARATOR.'c2', 'relativePathname' => 'c'.\DIRECTORY_SEPARATOR.'c2'],
-            ['key' => $dir.'a'.\DIRECTORY_SEPARATOR.'b'.\DIRECTORY_SEPARATOR.'c'.\DIRECTORY_SEPARATOR.'c2', 'relativePathname' => 'b'.\DIRECTORY_SEPARATOR.'c'.\DIRECTORY_SEPARATOR.'c2'],
+            ['key' => $dir.'a/b'.\DIRECTORY_SEPARATOR.'c'.\DIRECTORY_SEPARATOR.'c2', 'relativePathname' => 'b'.\DIRECTORY_SEPARATOR.'c'.\DIRECTORY_SEPARATOR.'c2'],
         ];
 
-        if ('\\' === \DIRECTORY_SEPARATOR) {
-            usort($expected, static fn ($a, $b) => $a['key'] <=> $b['key']);
-        }
-
-        $this->assertSame($expected, self::formatForAssert($finder));
+        $this->assertEqualsCanonicalizing($expected, self::formatForAssert($finder));
     }
 
     public function testRelativePathWithAppendedFinderForChildDirectory()
@@ -1432,16 +1493,12 @@ class FinderTest extends Iterator\RealIteratorTestCase
             ['key' => $dir.'a/b'.\DIRECTORY_SEPARATOR.'b2', 'relativePathname' => 'b2'],
             ['key' => $dir.'a/b'.\DIRECTORY_SEPARATOR.'c', 'relativePathname' => 'c'],
             ['key' => $dir.'a/b'.\DIRECTORY_SEPARATOR.'c'.\DIRECTORY_SEPARATOR.'c1', 'relativePathname' => 'c'.\DIRECTORY_SEPARATOR.'c1'],
-            ['key' => $dir.'a/b/c'.\DIRECTORY_SEPARATOR.'c1', 'relativePathname' => 'c1'],
+            ['key' => $dir.'a/b/c/c1', 'relativePathname' => 'c1'],
             ['key' => $dir.'a/b'.\DIRECTORY_SEPARATOR.'c'.\DIRECTORY_SEPARATOR.'c2', 'relativePathname' => 'c'.\DIRECTORY_SEPARATOR.'c2'],
-            ['key' => $dir.'a/b/c'.\DIRECTORY_SEPARATOR.'c2', 'relativePathname' => 'c2'],
+            ['key' => $dir.'a/b/c/c2', 'relativePathname' => 'c2'],
         ];
 
-        if ('\\' === \DIRECTORY_SEPARATOR) {
-            usort($expected, static fn ($a, $b) => $a['key'] <=> $b['key']);
-        }
-
-        $this->assertSame($expected, self::formatForAssert($finder));
+        $this->assertEqualsCanonicalizing($expected, self::formatForAssert($finder));
     }
 
     public function testRelativePathWithAppendedPaths()
@@ -1476,11 +1533,7 @@ class FinderTest extends Iterator\RealIteratorTestCase
             ['key' => $dir.'a/b'.\DIRECTORY_SEPARATOR.'c'.\DIRECTORY_SEPARATOR.'c2', 'relativePathname' => 'c'.\DIRECTORY_SEPARATOR.'c2'],
         ];
 
-        if ('\\' === \DIRECTORY_SEPARATOR) {
-            usort($expected, static fn ($a, $b) => $a['key'] <=> $b['key']);
-        }
-
-        $this->assertSame($expected, self::formatForAssert($finder));
+        $this->assertEqualsCanonicalizing($expected, self::formatForAssert($finder));
     }
 
     public function testRelativePathWithAppendedOnEmptyFinder()
@@ -1892,5 +1945,15 @@ class FinderTest extends Iterator\RealIteratorTestCase
         }
 
         return $data;
+    }
+
+    public function testNormalizeDirKeepsTrailingSlashForStreamWrappers()
+    {
+        $normalize = new \ReflectionMethod(Finder::class, 'normalizeDir');
+        $finder = new Finder();
+
+        $this->assertSame('s3://bucket/test_dir/', $normalize->invoke($finder, 's3://bucket/test_dir'));
+        $this->assertSame('sftp://host/test_dir/', $normalize->invoke($finder, 'sftp://host/test_dir'));
+        $this->assertSame(__DIR__, $normalize->invoke($finder, __DIR__.'/'));
     }
 }

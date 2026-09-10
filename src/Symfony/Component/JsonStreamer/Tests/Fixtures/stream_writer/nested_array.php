@@ -13,24 +13,24 @@ return static function (mixed $data, \Psr\Container\ContainerInterface $transfor
             yield "{";
             $prefix3 = '';
             foreach ($value1->dummies as $key2 => $value2) {
-                $key2 = is_int($key2) ? $key2 : \substr(\json_encode($key2), 1, -1);
+                $key2 = is_int($key2) ? $key2 : \substr(\json_encode($key2, \JSON_THROW_ON_ERROR | \JSON_PRESERVE_ZERO_FRACTION | \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE), 1, -1);
                 $prefix4 = '';
                 yield "{$prefix3}\"{$key2}\":{{$prefix4}\"id\":";
-                yield \json_encode($value2->id, \JSON_THROW_ON_ERROR, 508);
+                yield \json_encode($value2->id, \JSON_THROW_ON_ERROR | \JSON_PRESERVE_ZERO_FRACTION | \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE, 508);
                 $prefix4 = ',';
                 yield "{$prefix4}\"name\":";
-                yield \json_encode($value2->name, \JSON_THROW_ON_ERROR, 508);
+                yield \json_encode($value2->name, \JSON_THROW_ON_ERROR | \JSON_PRESERVE_ZERO_FRACTION | \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE, 508);
                 yield "}";
                 $prefix3 = ',';
             }
             $prefix2 = ',';
             yield "}{$prefix2}\"customProperty\":";
-            yield \json_encode($value1->customProperty, \JSON_THROW_ON_ERROR, 510);
+            yield \json_encode($value1->customProperty, \JSON_THROW_ON_ERROR | \JSON_PRESERVE_ZERO_FRACTION | \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE, 510);
             yield "}";
             $prefix1 = ',';
         }
         yield "]";
     } catch (\JsonException $e) {
-        throw new \Symfony\Component\JsonStreamer\Exception\NotEncodableValueException($e->getMessage(), 0, $e);
+        throw new \Symfony\Component\JsonStreamer\Exception\NotEncodableValueException("Cannot encode \"list<Symfony\\Component\\JsonStreamer\\Tests\\Fixtures\\Model\\DummyWithArray>\" to JSON: {$e->getMessage()}.", 0, $e);
     }
 };

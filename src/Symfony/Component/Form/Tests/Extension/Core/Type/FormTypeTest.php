@@ -27,7 +27,9 @@ use Symfony\Component\Form\Forms;
 use Symfony\Component\Form\Tests\Fixtures\Author;
 use Symfony\Component\Form\Tests\Fixtures\FixedDataTransformer;
 use Symfony\Component\OptionsResolver\Exception\InvalidOptionsException;
+use Symfony\Component\OptionsResolver\Options;
 use Symfony\Component\PropertyAccess\PropertyPath;
+use Symfony\Component\Translation\TranslatableMessage;
 use Symfony\Component\Validator\Validation;
 
 class FormTest_AuthorWithoutRefSetter
@@ -752,6 +754,36 @@ $ref2
         $this->assertEquals(['%parent_param%' => 'parent_value', '%override_param%' => 'child_value'], $view['child']->vars['help_translation_parameters']);
     }
 
+    public function testTranslatableLabelDoesNotInheritLabelTranslationParameters()
+    {
+        $view = $this->factory
+            ->createNamedBuilder('parent', self::TESTED_TYPE, null, [
+                'label_translation_parameters' => ['%param%' => 'value'],
+            ])
+            ->add('child', $this->getTestedType(), [
+                'label' => new TranslatableMessage('child.label'),
+            ])
+            ->getForm()
+            ->createView();
+
+        $this->assertSame([], $view['child']->vars['label_translation_parameters']);
+    }
+
+    public function testTranslatableHelpDoesNotInheritHelpTranslationParameters()
+    {
+        $view = $this->factory
+            ->createNamedBuilder('parent', self::TESTED_TYPE, null, [
+                'help_translation_parameters' => ['%param%' => 'value'],
+            ])
+            ->add('child', $this->getTestedType(), [
+                'help' => new TranslatableMessage('child.help'),
+            ])
+            ->getForm()
+            ->createView();
+
+        $this->assertSame([], $view['child']->vars['help_translation_parameters']);
+    }
+
     public function testErrorBubblingDoesNotSkipCompoundFieldsWithInheritDataConfigured()
     {
         $form = $this->factory->createNamedBuilder('form', self::TESTED_TYPE)
@@ -856,6 +888,20 @@ $ref2
             'child3',
         ];
         $this->assertSame($expected, array_keys($view->children));
+    }
+
+    public function testUploadMaxSizeMessageDoesNotCaptureOptions()
+    {
+        $form = $this->factory->create(self::TESTED_TYPE);
+        $uploadMaxSizeMessage = $form->getConfig()->getOption('upload_max_size_message');
+
+        $this->assertSame('The uploaded file was too large. Please try to upload a smaller file.', $uploadMaxSizeMessage());
+
+        // Capturing the Options instance keeps one OptionsResolver clone alive per
+        // resolved form, which is a significant amount of memory on large forms.
+        foreach ((new \ReflectionFunction($uploadMaxSizeMessage))->getStaticVariables() as $value) {
+            $this->assertNotInstanceOf(Options::class, $value);
+        }
     }
 }
 

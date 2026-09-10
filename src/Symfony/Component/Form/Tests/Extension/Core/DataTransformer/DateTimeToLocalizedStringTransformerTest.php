@@ -169,6 +169,17 @@ class DateTimeToLocalizedStringTransformerTest extends BaseDateTimeTransformerTe
         date_default_timezone_set($tz);
     }
 
+    public function testTransformDateBeforeTheGregorianCutover()
+    {
+        if (4 === \PHP_INT_SIZE) {
+            $this->markTestSkipped('Dates before 1582 do not fit in a 32 bit timestamp.');
+        }
+
+        $transformer = new DateTimeToLocalizedStringTransformer('UTC', 'UTC', null, null, \IntlDateFormatter::GREGORIAN, 'yyyy-MM-dd');
+
+        $this->assertSame('1582-01-01', $transformer->transform(new \DateTime('1582-01-01 UTC')));
+    }
+
     public function testTransformWithDifferentPatterns()
     {
         $transformer = new DateTimeToLocalizedStringTransformer('UTC', 'UTC', \IntlDateFormatter::FULL, \IntlDateFormatter::FULL, \IntlDateFormatter::GREGORIAN, 'MM*yyyy*dd HH|mm|ss');
@@ -260,6 +271,17 @@ class DateTimeToLocalizedStringTransformerTest extends BaseDateTimeTransformerTe
         $this->assertDateTimeEquals($dateTime, $transformer->reverseTransform('2017-01-10'));
     }
 
+    public function testReverseTransformDateBeforeTheGregorianCutover()
+    {
+        if (4 === \PHP_INT_SIZE) {
+            $this->markTestSkipped('Dates before 1582 do not fit in a 32 bit timestamp.');
+        }
+
+        $transformer = new DateTimeToLocalizedStringTransformer('UTC', 'UTC', null, null, \IntlDateFormatter::GREGORIAN, 'yyyy-MM-dd');
+
+        $this->assertDateTimeEquals(new \DateTime('1582-01-01 UTC'), $transformer->reverseTransform('1582-01-01'));
+    }
+
     public function testReverseTransformWithDifferentPatterns()
     {
         $transformer = new DateTimeToLocalizedStringTransformer('UTC', 'UTC', \IntlDateFormatter::FULL, \IntlDateFormatter::FULL, \IntlDateFormatter::GREGORIAN, 'MM*yyyy*dd HH|mm|ss');
@@ -338,7 +360,7 @@ class DateTimeToLocalizedStringTransformerTest extends BaseDateTimeTransformerTe
     }
 
     #[RequiresPhpExtension('intl')]
-    #[RequiresPhp('< 8.5')]
+    #[RequiresPhp('< 8.5.0')]
     public function testReverseTransformWrapsIntlErrorsWithErrorLevel()
     {
         $errorLevel = ini_set('intl.error_level', \E_WARNING);
@@ -367,7 +389,7 @@ class DateTimeToLocalizedStringTransformerTest extends BaseDateTimeTransformerTe
     }
 
     #[RequiresPhpExtension('intl')]
-    #[RequiresPhp('< 8.5')]
+    #[RequiresPhp('< 8.5.0')]
     public function testReverseTransformWrapsIntlErrorsWithExceptionsAndErrorLevel()
     {
         $initialUseExceptions = ini_set('intl.use_exceptions', 1);
@@ -392,7 +414,7 @@ class DateTimeToLocalizedStringTransformerTest extends BaseDateTimeTransformerTe
 
         $this->assertSame(
             '2024-03-31 2024w14',
-            (new DateTimeToLocalizedStringTransformer(calendar: $weekBeginsOnSunday, pattern: "y-MM-dd y'w'w"))->transform($dateTime),
+            (new DateTimeToLocalizedStringTransformer(null, null, null, null, $weekBeginsOnSunday, "y-MM-dd y'w'w"))->transform($dateTime),
         );
 
         $weekBeginsOnMonday = \IntlCalendar::createInstance();
@@ -400,7 +422,7 @@ class DateTimeToLocalizedStringTransformerTest extends BaseDateTimeTransformerTe
 
         $this->assertSame(
             '2024-03-31 2024w13',
-            (new DateTimeToLocalizedStringTransformer(calendar: $weekBeginsOnMonday, pattern: "y-MM-dd y'w'w"))->transform($dateTime),
+            (new DateTimeToLocalizedStringTransformer(null, null, null, null, $weekBeginsOnMonday, "y-MM-dd y'w'w"))->transform($dateTime),
         );
     }
 
@@ -411,7 +433,7 @@ class DateTimeToLocalizedStringTransformerTest extends BaseDateTimeTransformerTe
 
         $this->assertSame(
             '2024-03-31',
-            (new DateTimeToLocalizedStringTransformer(calendar: $weekBeginsOnSunday, pattern: "y-MM-dd y'w'w"))
+            (new DateTimeToLocalizedStringTransformer(null, null, null, null, $weekBeginsOnSunday, "y-MM-dd y'w'w"))
                 ->reverseTransform('2024-03-31 2024w14')
                 ->format('Y-m-d'),
         );
@@ -421,7 +443,7 @@ class DateTimeToLocalizedStringTransformerTest extends BaseDateTimeTransformerTe
 
         $this->assertSame(
             '2024-03-31',
-            (new DateTimeToLocalizedStringTransformer(calendar: $weekBeginsOnMonday, pattern: "y-MM-dd y'w'w"))
+            (new DateTimeToLocalizedStringTransformer(null, null, null, null, $weekBeginsOnMonday, "y-MM-dd y'w'w"))
                 ->reverseTransform('2024-03-31 2024w13')
                 ->format('Y-m-d'),
         );
@@ -432,8 +454,8 @@ class DateTimeToLocalizedStringTransformerTest extends BaseDateTimeTransformerTe
         $now = new \DateTimeImmutable();
 
         $this->assertSame(
-            (new DateTimeToLocalizedStringTransformer(calendar: \IntlDateFormatter::GREGORIAN, pattern: "y-MM-dd y'w'w"))->transform($now),
-            (new DateTimeToLocalizedStringTransformer(pattern: "y-MM-dd y'w'w"))->transform($now),
+            (new DateTimeToLocalizedStringTransformer(null, null, null, null, \IntlDateFormatter::GREGORIAN, "y-MM-dd y'w'w"))->transform($now),
+            (new DateTimeToLocalizedStringTransformer(null, null, null, null, \IntlDateFormatter::GREGORIAN, "y-MM-dd y'w'w"))->transform($now),
         );
     }
 
@@ -442,7 +464,7 @@ class DateTimeToLocalizedStringTransformerTest extends BaseDateTimeTransformerTe
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('The "calendar" option should be either an \IntlDateFormatter constant or an \IntlCalendar instance.');
 
-        new DateTimeToLocalizedStringTransformer(calendar: 123456);
+        new DateTimeToLocalizedStringTransformer(null, null, null, null, 123456);
     }
 
     protected function createDateTimeTransformer(?string $inputTimezone = null, ?string $outputTimezone = null): BaseDateTimeTransformer

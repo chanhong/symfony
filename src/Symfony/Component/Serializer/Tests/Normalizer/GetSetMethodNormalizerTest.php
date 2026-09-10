@@ -530,6 +530,18 @@ class GetSetMethodNormalizerTest extends TestCase
         return new GetSetMethodNormalizer(new ClassMetadataFactory(new AttributeLoader()));
     }
 
+    public function testUnrelatedErrorFromGetterIsNotSwallowed()
+    {
+        $normalizer = new GetSetMethodNormalizer();
+
+        $this->expectException(\TypeError::class);
+        $this->expectExceptionMessage('intentional getter failure');
+
+        $normalizer->normalize(new GetSetDummyWithThrowingGetter(), null, [
+            'skip_uninitialized_values' => true,
+        ]);
+    }
+
     public function testNormalizeWithDiscriminator()
     {
         $classMetadataFactory = new ClassMetadataFactory(new AttributeLoader());
@@ -610,6 +622,20 @@ class GetSetMethodNormalizerTest extends TestCase
         $this->assertSame($expected, $obj->$method());
     }
 
+    public function testSupportsAndDenormalizeConstructorOnlyObject()
+    {
+        $this->assertTrue($this->normalizer->supportsDenormalization(['x' => 1, 'y' => 2], ImmutableDummy::class));
+
+        $obj = $this->normalizer->denormalize(['x' => 1, 'y' => 2], ImmutableDummy::class);
+        $this->assertSame(1, $obj->getX());
+        $this->assertSame(2, $obj->getY());
+    }
+
+    public function testDoesNotSupportDenormalizationOfNonPublicConstructorOnlyObject()
+    {
+        $this->assertFalse($this->normalizer->supportsDenormalization(['x' => 1], ImmutablePrivateConstructorDummy::class));
+    }
+
     public function testDiscriminatorWithAllowExtraAttributesFalse()
     {
         // Discriminator type property should be allowed with allow_extra_attributes=false
@@ -625,6 +651,25 @@ class GetSetMethodNormalizerTest extends TestCase
         );
 
         $this->assertInstanceOf(GetSetMethodDiscriminatedDummyOne::class, $obj);
+    }
+
+    public function testDenormalizeNestedDiscriminatorMapWithAllowExtraAttributesFalse()
+    {
+        $classMetadataFactory = new ClassMetadataFactory(new AttributeLoader());
+        $discriminator = new ClassDiscriminatorFromClassMetadata($classMetadataFactory);
+        $normalizer = new GetSetMethodNormalizer($classMetadataFactory, null, null, $discriminator);
+
+        $obj = $normalizer->denormalize(
+            ['type' => 'sub', 'nested_type' => 'sub_sub', 'foo' => 'FOO', 'bar' => 'BAR', 'baz' => 'BAZ'],
+            GetSetMethodNestedDiscriminatorBase::class,
+            null,
+            [AbstractNormalizer::ALLOW_EXTRA_ATTRIBUTES => false]
+        );
+
+        $this->assertInstanceOf(GetSetMethodNestedDiscriminatorSubSub::class, $obj);
+        $this->assertSame('FOO', $obj->getFoo());
+        $this->assertSame('BAR', $obj->getBar());
+        $this->assertSame('BAZ', $obj->getBaz());
     }
 
     public function testSkipVoidNeverReturnTypeAccessors()
@@ -779,6 +824,43 @@ class GetConstructorDummy
     }
 }
 
+class ImmutableDummy
+{
+    public function __construct(
+        private int $x,
+        private int $y,
+    ) {
+    }
+
+    public function getX(): int
+    {
+        return $this->x;
+    }
+
+    public function getY(): int
+    {
+        return $this->y;
+    }
+}
+
+class ImmutablePrivateConstructorDummy
+{
+    private function __construct(
+        private int $x,
+    ) {
+    }
+
+    public static function create(int $x): self
+    {
+        return new self($x);
+    }
+
+    public function getX(): int
+    {
+        return $this->x;
+    }
+}
+
 class GetConstructorOptionalArgsDummy
 {
     protected $foo;
@@ -810,6 +892,14 @@ class GetConstructorOptionalArgsDummy
     public function otherMethod()
     {
         throw new \RuntimeException('Dummy::otherMethod() should not be called');
+    }
+}
+
+class GetSetDummyWithThrowingGetter
+{
+    public function getValue(): string
+    {
+        throw new \TypeError('intentional getter failure');
     }
 }
 
@@ -1080,5 +1170,58 @@ class GetSetDummyWithCanOnly
     public function canWrite(): bool
     {
         return false;
+    }
+}
+
+#[DiscriminatorMap(typeProperty: 'type', mapping: [
+    'base' => GetSetMethodNestedDiscriminatorBase::class,
+    'sub' => GetSetMethodNestedDiscriminatorSub::class,
+])]
+class GetSetMethodNestedDiscriminatorBase
+{
+    private string $foo = 'foo';
+
+    public function getFoo(): string
+    {
+        return $this->foo;
+    }
+
+    public function setFoo(string $foo): void
+    {
+        $this->foo = $foo;
+    }
+}
+
+#[DiscriminatorMap(typeProperty: 'nested_type', mapping: [
+    'sub' => GetSetMethodNestedDiscriminatorSub::class,
+    'sub_sub' => GetSetMethodNestedDiscriminatorSubSub::class,
+])]
+class GetSetMethodNestedDiscriminatorSub extends GetSetMethodNestedDiscriminatorBase
+{
+    private string $bar = 'bar';
+
+    public function getBar(): string
+    {
+        return $this->bar;
+    }
+
+    public function setBar(string $bar): void
+    {
+        $this->bar = $bar;
+    }
+}
+
+class GetSetMethodNestedDiscriminatorSubSub extends GetSetMethodNestedDiscriminatorSub
+{
+    private string $baz = 'baz';
+
+    public function getBaz(): string
+    {
+        return $this->baz;
+    }
+
+    public function setBaz(string $baz): void
+    {
+        $this->baz = $baz;
     }
 }

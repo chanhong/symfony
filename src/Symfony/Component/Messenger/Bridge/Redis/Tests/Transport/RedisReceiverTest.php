@@ -115,6 +115,27 @@ class RedisReceiverTest extends TestCase
         $this->assertEquals(new DummyMessage('Hello'), $envelopes[1]->getMessage());
     }
 
+    public function testGetRefetchesAfterAllNullDataBatchWithoutGrowingTheStack()
+    {
+        $connection = $this->createMock(Connection::class);
+        $connection->expects($this->exactly(2))
+            ->method('get')
+            ->willReturnOnConsecutiveCalls(
+                [
+                    ['id' => '1', 'data' => null],
+                    ['id' => '2', 'data' => null],
+                ],
+                null,
+            );
+        $connection->expects($this->exactly(2))->method('reject');
+
+        $receiver = new RedisReceiver($connection, new Serializer(
+            new SerializerComponent\Serializer([new ObjectNormalizer()], ['json' => new JsonEncoder()])
+        ));
+
+        $this->assertSame([], $receiver->get());
+    }
+
     #[DataProvider('rejectedRedisEnvelopeProvider')]
     public function testItRejectTheMessageIfThereIsAMessageDecodingFailedException(array $redisEnvelope)
     {
@@ -129,6 +150,30 @@ class RedisReceiverTest extends TestCase
 
         $this->assertCount(1, $envelopes);
         $this->assertInstanceOf(MessageDecodingFailedException::class, $envelopes[0]->getMessage());
+    }
+
+    public function testItIgnoresAMessageFieldThatDoesNotDecodeToAnArray()
+    {
+        $connection = $this->createStub(Connection::class);
+        $connection->method('get')->willReturn([['id' => '1', 'data' => ['message' => '12345']]]);
+
+        $receiver = new RedisReceiver($connection, new PhpSerializer());
+
+        $this->assertSame([], $receiver->get());
+
+        $connection = $this->createStub(Connection::class);
+        $connection->method('get')->willReturn([['id' => '2', 'data' => ['message' => '"a string"']]]);
+
+        $receiver = new RedisReceiver($connection, new PhpSerializer());
+
+        $this->assertSame([], $receiver->get());
+
+        $connection = $this->createStub(Connection::class);
+        $connection->method('get')->willReturn([['id' => '3', 'data' => ['message' => 'false']]]);
+
+        $receiver = new RedisReceiver($connection, new PhpSerializer());
+
+        $this->assertSame([], $receiver->get());
     }
 
     public static function redisEnvelopeProvider(): \Generator

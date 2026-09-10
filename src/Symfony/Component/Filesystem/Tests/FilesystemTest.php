@@ -13,6 +13,8 @@ namespace Symfony\Component\Filesystem\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Depends;
+use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\IgnoreDeprecations;
 use Symfony\Component\Filesystem\Exception\InvalidArgumentException;
 use Symfony\Component\Filesystem\Exception\IOException;
 use Symfony\Component\Filesystem\Path;
@@ -1182,18 +1184,18 @@ class FilesystemTest extends FilesystemTestCase
             ['/aa/bb/../../cc', '/aa/../dd/..', 'cc/'],
             ['/../aa/bb/cc', '/aa/dd/..', 'bb/cc/'],
             ['/../../aa/../bb/cc', '/aa/dd/..', '../bb/cc/'],
-            ['C:/aa/bb/cc', 'C:/aa/dd/..', 'bb/cc/'],
-            ['C:/aa/bb/cc', 'c:/aa/dd/..', 'bb/cc/'],
-            ['c:/aa/../bb/cc', 'c:/aa/dd/..', '../bb/cc/'],
-            ['C:/aa/bb/../../cc', 'C:/aa/../dd/..', 'cc/'],
-            ['C:/../aa/bb/cc', 'C:/aa/dd/..', 'bb/cc/'],
-            ['C:/../../aa/../bb/cc', 'C:/aa/dd/..', '../bb/cc/'],
-            ['D:/', 'C:/aa/../bb/cc', 'D:/'],
-            ['D:/aa/bb', 'C:/aa', 'D:/aa/bb/'],
-            ['D:/../../aa/../bb/cc', 'C:/aa/dd/..', 'D:/bb/cc/'],
         ];
 
         if ('\\' === \DIRECTORY_SEPARATOR) {
+            $paths[] = ['C:/aa/bb/cc', 'C:/aa/dd/..', 'bb/cc/'];
+            $paths[] = ['C:/aa/bb/cc', 'c:/aa/dd/..', 'bb/cc/'];
+            $paths[] = ['c:/aa/../bb/cc', 'c:/aa/dd/..', '../bb/cc/'];
+            $paths[] = ['C:/aa/bb/../../cc', 'C:/aa/../dd/..', 'cc/'];
+            $paths[] = ['C:/../aa/bb/cc', 'C:/aa/dd/..', 'bb/cc/'];
+            $paths[] = ['C:/../../aa/../bb/cc', 'C:/aa/dd/..', '../bb/cc/'];
+            $paths[] = ['D:/', 'C:/aa/../bb/cc', 'D:/'];
+            $paths[] = ['D:/aa/bb', 'C:/aa', 'D:/aa/bb/'];
+            $paths[] = ['D:/../../aa/../bb/cc', 'C:/aa/dd/..', 'D:/bb/cc/'];
             $paths[] = ['c:\var\lib/symfony/src/Symfony/', 'c:/var/lib/symfony/', 'src/Symfony/'];
         }
 
@@ -1267,6 +1269,26 @@ class FilesystemTest extends FilesystemTestCase
         $this->assertFalse($this->filesystem->exists($targetPath.'directory'.\DIRECTORY_SEPARATOR.'file1'));
     }
 
+    public function testMirrorWithCustomIteratorAndDeleteOption()
+    {
+        $sourcePath = $this->workspace.\DIRECTORY_SEPARATOR.'source-with-a-longer-name'.\DIRECTORY_SEPARATOR;
+        $targetPath = $this->workspace.\DIRECTORY_SEPARATOR.'target'.\DIRECTORY_SEPARATOR;
+
+        mkdir($sourcePath);
+        file_put_contents($sourcePath.'file1', 'FILE1');
+
+        mkdir($targetPath);
+        file_put_contents($targetPath.'obsolete', 'OBSOLETE');
+
+        $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($sourcePath, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::SELF_FIRST);
+
+        $this->filesystem->mirror($sourcePath, $targetPath, $iterator, ['delete' => true]);
+
+        $this->assertStringEqualsFile($sourcePath.'file1', 'FILE1');
+        $this->assertStringEqualsFile($targetPath.'file1', 'FILE1');
+        $this->assertFileDoesNotExist($targetPath.'obsolete');
+    }
+
     public function testMirrorCreatesEmptyDirectory()
     {
         $sourcePath = $this->workspace.\DIRECTORY_SEPARATOR.'source'.\DIRECTORY_SEPARATOR;
@@ -1318,6 +1340,50 @@ class FilesystemTest extends FilesystemTestCase
         $this->assertDirectoryExists($targetPath);
         $this->assertFileEquals($sourcePath.'file1', $targetPath.'link1');
         $this->assertFalse(is_link($targetPath.\DIRECTORY_SEPARATOR.'link1'));
+    }
+
+    #[Group('legacy')]
+    #[IgnoreDeprecations]
+    public function testMirrorCopyOnWindowsOptionTriggersDeprecation()
+    {
+        $this->markAsSkippedIfSymlinkIsMissing();
+
+        $this->expectUserDeprecationMessage('Since symfony/filesystem 8.1: Calling "Symfony\Component\Filesystem\Filesystem::mirror()" with option "copy_on_windows" is deprecated, use option "follow_symlinks" instead.');
+
+        $sourcePath = $this->workspace.\DIRECTORY_SEPARATOR.'source'.\DIRECTORY_SEPARATOR;
+
+        mkdir($sourcePath);
+        file_put_contents($sourcePath.'file1', 'FILE1');
+        symlink($sourcePath.'file1', $sourcePath.'link1');
+
+        $targetPath = $this->workspace.\DIRECTORY_SEPARATOR.'target'.\DIRECTORY_SEPARATOR;
+
+        $this->filesystem->mirror($sourcePath, $targetPath, null, ['copy_on_windows' => true]);
+
+        $this->assertDirectoryExists($targetPath);
+        $this->assertFileEquals($sourcePath.'file1', $targetPath.'link1');
+        $this->assertFalse(is_link($targetPath.\DIRECTORY_SEPARATOR.'link1'));
+    }
+
+    #[Group('legacy')]
+    #[IgnoreDeprecations]
+    public function testMirrorFollowSymlinksOverridesCopyOnWindows()
+    {
+        $this->markAsSkippedIfSymlinkIsMissing();
+
+        $sourcePath = $this->workspace.\DIRECTORY_SEPARATOR.'source'.\DIRECTORY_SEPARATOR;
+
+        mkdir($sourcePath);
+        file_put_contents($sourcePath.'file1', 'FILE1');
+        symlink($sourcePath.'file1', $sourcePath.'link1');
+
+        $targetPath = $this->workspace.\DIRECTORY_SEPARATOR.'target'.\DIRECTORY_SEPARATOR;
+
+        $this->filesystem->mirror($sourcePath, $targetPath, null, ['follow_symlinks' => false, 'copy_on_windows' => true]);
+
+        $this->assertDirectoryExists($targetPath);
+        $this->assertFileEquals($sourcePath.'file1', $targetPath.'link1');
+        $this->assertTrue(is_link($targetPath.\DIRECTORY_SEPARATOR.'link1'));
     }
 
     public function testMirrorCopiesLinkedDirectoryContents()
@@ -1468,14 +1534,19 @@ class FilesystemTest extends FilesystemTestCase
 
     public static function providePathsForIsAbsolutePath()
     {
-        return [
+        $paths = [
             ['/var/lib', true],
-            ['c:\\\\var\\lib', true],
-            ['\\var\\lib', true],
             ['var/lib', false],
             ['../var/lib', false],
             ['', false],
         ];
+
+        if ('\\' === \DIRECTORY_SEPARATOR) {
+            $paths[] = ['c:\\\\var\\lib', true];
+            $paths[] = ['\\var\\lib', true];
+        }
+
+        return $paths;
     }
 
     public function testTempnam()
@@ -1485,6 +1556,36 @@ class FilesystemTest extends FilesystemTestCase
         $filename = $this->filesystem->tempnam($dirname, 'foo');
 
         $this->assertFileExists($filename);
+    }
+
+    public function testTempnamWithSuffixIsPrivate()
+    {
+        if ('\\' === \DIRECTORY_SEPARATOR) {
+            $this->markTestSkipped('This test cannot run on Windows.');
+        }
+
+        $oldUmask = umask(0o022);
+        try {
+            $filename = $this->filesystem->tempnam($this->workspace, 'foo', '.txt');
+
+            $this->assertFileExists($filename);
+            $this->assertSame(0o600, fileperms($filename) & 0o777);
+            $this->assertSame(0o022, umask());
+        } finally {
+            umask($oldUmask);
+        }
+    }
+
+    public function testTempnamTrimsTrailingWhitespaceFromTruncatedPrefix()
+    {
+        // PHP's tempnam() truncates the prefix to 63 characters; if that leaves a
+        // trailing space, the file creation fails on Windows. See #64722.
+        $prefix = str_repeat('a', 62).' suffix';
+
+        $filename = $this->filesystem->tempnam($this->workspace, $prefix);
+
+        $this->assertFileExists($filename);
+        $this->assertStringNotContainsString(' ', basename($filename));
     }
 
     public function testTempnamWithFileScheme()
@@ -1865,7 +1966,7 @@ class FilesystemTest extends FilesystemTestCase
     public function testReadNonExistentFile()
     {
         $this->expectException(IOException::class);
-        $this->expectExceptionMessageMatches(\sprintf('#^Failed to read file ".+%1$sTests/invalid"\\: file_get_contents\\(.+%1$sTests/invalid\\)\\: Failed to open stream\\: No such file or directory$#', preg_quote(\DIRECTORY_SEPARATOR)));
+        $this->expectExceptionMessageMatches(\sprintf('#^Failed to read file ".+%1$sTests/invalid"\\: file_get_contents\\((.+%1$sTests/invalid)?\\)\\: Failed to open stream\\: No such file or directory$#', preg_quote(\DIRECTORY_SEPARATOR)));
 
         $this->filesystem->readFile(__DIR__.'/invalid');
     }
@@ -1887,7 +1988,7 @@ class FilesystemTest extends FilesystemTestCase
         chmod($filename, 0o000);
 
         $this->expectException(IOException::class);
-        $this->expectExceptionMessageMatches('#^Failed to read file ".+/unreadable.txt"\\: file_get_contents\\(.+/unreadable.txt\\)\\: Failed to open stream\\: Permission denied$#');
+        $this->expectExceptionMessageMatches('#^Failed to read file ".+/unreadable.txt"\\: file_get_contents\\((.+/unreadable.txt)?\\)\\: Failed to open stream\\: Permission denied$#');
 
         $this->filesystem->readFile($filename);
     }
@@ -1904,7 +2005,22 @@ class FilesystemTest extends FilesystemTestCase
 
         $this->filesystem->copy($sourceFilePath, $targetFilePath);
 
-        $this->assertFilePermissions(767, $targetFilePath);
+        $this->assertFilePermissions(745, $targetFilePath);
+    }
+
+    public function testCopyShouldKeepRestrictivePermissions()
+    {
+        $this->markAsSkippedIfChmodIsMissing();
+
+        $sourceFilePath = $this->workspace.\DIRECTORY_SEPARATOR.'copy_source_file';
+        $targetFilePath = $this->workspace.\DIRECTORY_SEPARATOR.'copy_target_file';
+
+        file_put_contents($sourceFilePath, 'SOURCE FILE');
+        chmod($sourceFilePath, 0o600);
+
+        $this->filesystem->copy($sourceFilePath, $targetFilePath);
+
+        $this->assertFilePermissions(600, $targetFilePath);
     }
 
     public function testDumpToProtectedDirectory()

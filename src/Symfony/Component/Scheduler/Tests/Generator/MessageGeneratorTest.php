@@ -15,6 +15,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Cache\Adapter\ArrayAdapter;
 use Symfony\Component\Clock\MockClock;
+use Symfony\Component\Scheduler\Exception\LogicException;
 use Symfony\Component\Scheduler\Generator\Checkpoint;
 use Symfony\Component\Scheduler\Generator\MessageContext;
 use Symfony\Component\Scheduler\Generator\MessageGenerator;
@@ -260,6 +261,72 @@ class MessageGeneratorTest extends TestCase
         $this->assertCount(1, iterator_to_array($scheduler->getMessages(), false));
 
         $this->assertEquals(self::makeDateTime('22:23:10'), $clock->now());
+    }
+
+    public function testCheckpointWithMultipleRecurringMessagesAtSameTriggerTime()
+    {
+        $clock = new MockClock(self::makeDateTime('22:12:00'));
+
+        $first = (object) ['id' => 'first'];
+        $second = (object) ['id' => 'second'];
+        $cache = new ArrayAdapter();
+
+        // First MessageGenerator instance: simulates the first messenger:consume process.
+        $schedule1 = (new Schedule())->add(
+            RecurringMessage::every('30 seconds', $first),
+            RecurringMessage::every('30 seconds', $second),
+        );
+        $schedule1->stateful($cache);
+        $scheduler1 = new MessageGenerator($schedule1, 'dummy', clock: $clock, checkpoint: new Checkpoint('dummy', cache: $cache));
+
+        // Warmup.
+        $this->assertSame([], iterator_to_array($scheduler1->getMessages(), false));
+
+        // Both messages are due at 22:12:30; the consumer stops after yielding only the
+        // first (mimics "messenger:consume --limit 1" or any early loop break).
+        $clock->sleep(30);
+        $yielded = [];
+        foreach ($scheduler1->getMessages() as $message) {
+            $yielded[] = $message;
+            break;
+        }
+        $this->assertSame([$first], $yielded);
+
+        // Next messenger:consume process: same checkpoint cache, fresh in-memory state.
+        $schedule2 = (new Schedule())->add(
+            RecurringMessage::every('30 seconds', $first),
+            RecurringMessage::every('30 seconds', $second),
+        );
+        $schedule2->stateful($cache);
+        $scheduler2 = new MessageGenerator($schedule2, 'dummy', clock: $clock, checkpoint: new Checkpoint('dummy', cache: $cache));
+
+        // The "second" message at 22:12:30 was never yielded. It must be picked up now
+        // instead of being silently dropped to the next interval at 22:13:00.
+        $this->assertSame([$second], iterator_to_array($scheduler2->getMessages(), false));
+    }
+
+    public function testThrowsWhenTriggerDoesNotMoveTheRunDateForward()
+    {
+        $clock = new MockClock(self::makeDateTime('22:12:00'));
+
+        $trigger = $this->createStub(TriggerInterface::class);
+        $trigger->method('__toString')->willReturn('frozen');
+        $trigger->method('getNextRunDate')->willReturn(self::makeDateTime('22:13:00'));
+
+        $schedule = (new Schedule())->add(RecurringMessage::trigger($trigger, (object) []));
+        $schedule->stateful(new ArrayAdapter());
+
+        $scheduler = new MessageGenerator($schedule, 'dummy', $clock);
+
+        // Warmup. The first run always returns nothing.
+        $this->assertSame([], iterator_to_array($scheduler->getMessages(), false));
+
+        $clock->sleep(2 * 60);
+
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage('The "frozen" trigger does not move the run date forward.');
+
+        iterator_to_array($scheduler->getMessages(), false);
     }
 
     public static function messagesProvider(): \Generator

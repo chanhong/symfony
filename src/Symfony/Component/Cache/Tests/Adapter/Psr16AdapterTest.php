@@ -21,9 +21,10 @@ use Symfony\Component\Cache\Psr16Cache;
 #[Group('time-sensitive')]
 class Psr16AdapterTest extends AdapterTestCase
 {
-    protected $skippedTests = [
+    protected array $skippedTests = [
         'testPrune' => 'Psr16adapter just proxies',
         'testClearPrefix' => 'SimpleCache cannot clear by prefix',
+        'testClearPrefixWithUnderscore' => 'SimpleCache cannot clear by prefix',
     ];
 
     public function createCachePool(int $defaultLifetime = 0): CacheItemPoolInterface

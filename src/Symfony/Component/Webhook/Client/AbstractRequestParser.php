@@ -11,6 +11,7 @@
 
 namespace Symfony\Component\Webhook\Client;
 
+use Symfony\Component\HttpFoundation\Exception\RequestExceptionInterface;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\RequestMatcherInterface;
 use Symfony\Component\HttpFoundation\Response;
@@ -26,7 +27,11 @@ abstract class AbstractRequestParser implements RequestParserInterface
     {
         $this->validate($request);
 
-        return $this->doParse($request, $secret);
+        try {
+            return $this->doParse($request, $secret);
+        } catch (RequestExceptionInterface $e) {
+            throw new RejectWebhookException(406, 'Request body is malformed.', $e);
+        }
     }
 
     public function createSuccessfulResponse(?Request $request = null): Response
@@ -42,9 +47,19 @@ abstract class AbstractRequestParser implements RequestParserInterface
     abstract protected function getRequestMatcher(): RequestMatcherInterface;
 
     /**
-     * @return RemoteEvent|RemoteEvent[]|null
+     * Parses and authenticates the request, returning the resulting RemoteEvent(s).
      *
-     * @throws RejectWebhookException When the payload is rejected (signature issue, parse issue, ...)
+     * When the protocol requires it, implementations are responsible for verifying
+     * the request's authenticity (typically by comparing an HMAC of the raw body
+     * against a header value using hash_equals()) and for any replay protection
+     * (e.g. timestamp window). They must throw RejectWebhookException on any
+     * verification failure.
+     *
+     * The $request argument has already been matched by getRequestMatcher().
+     *
+     * @return RemoteEvent|RemoteEvent[]|null Returns null when the webhook must be ignored
+     *
+     * @throws RejectWebhookException On signature mismatch, malformed payload, replay, or unsupported event
      */
     abstract protected function doParse(Request $request, #[\SensitiveParameter] string $secret): RemoteEvent|array|null;
 

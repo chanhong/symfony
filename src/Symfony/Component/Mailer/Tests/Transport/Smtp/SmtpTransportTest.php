@@ -11,6 +11,7 @@
 
 namespace Symfony\Component\Mailer\Tests\Transport\Smtp;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Mailer\Envelope;
@@ -39,6 +40,38 @@ class SmtpTransportTest extends TestCase
 
         $t = new SmtpTransport((new SocketStream())->setHost('127.0.0.1')->setPort(2525)->disableTls());
         $this->assertEquals('smtp://127.0.0.1:2525', (string) $t);
+    }
+
+    public function testConnectionIsResetAfterTimeoutToPreventResponseDesync()
+    {
+        $stream = new TimeoutBufferStream();
+        $envelope = new Envelope(new Address('sender@example.org'), [new Address('recipient@example.org')]);
+
+        $transport = new SmtpTransport($stream);
+        // A failed send resets lastMessageTime to 0; keep the ping path out of the way.
+        $transport->setPingThreshold(\PHP_INT_MAX);
+
+        // The read of the first message's end-of-DATA reply times out.
+        try {
+            $transport->send(new RawMessage('Message 1'), $envelope);
+            $this->fail('The first message is expected to time out.');
+        } catch (TransportException $e) {
+            $this->assertStringContainsString('timed out', $e->getMessage());
+        }
+
+        // Before the fix, the timed-out reply stayed buffered and RSET consumed it, so
+        // every following command read one response too early: DATA got "250" instead of
+        // "354" ("Expected response code 354 but got code 250"). The connection must be
+        // closed and re-opened instead, so the next message goes through cleanly.
+        $transport->send(new RawMessage('Message 2'), $envelope);
+
+        $heloCommands = 0;
+        foreach ($stream->getCommands() as $command) {
+            if (str_starts_with($command, 'HELO')) {
+                ++$heloCommands;
+            }
+        }
+        $this->assertSame(2, $heloCommands, 'The transport must reconnect after a read timeout.');
     }
 
     public function testSendDoesNotPingBelowThreshold()
@@ -137,6 +170,28 @@ class SmtpTransportTest extends TestCase
         $this->assertContains("MAIL FROM:<sender@xn--exmple-cua.org>\r\n", $stream->getCommands());
         $this->assertContains("RCPT TO:<recipient@xn--exmple-cua.org>\r\n", $stream->getCommands());
         $this->assertContains("RCPT TO:<recipient2@example.org>\r\n", $stream->getCommands());
+    }
+
+    #[DataProvider('provideLocalDomainsWithControlCharacters')]
+    public function testSetLocalDomainRejectsControlCharacters(string $domain)
+    {
+        $transport = new SmtpTransport(new DummyStream());
+
+        $this->expectException(\Symfony\Component\Mailer\Exception\InvalidArgumentException::class);
+        $this->expectExceptionMessage('The local domain name must not contain control characters.');
+
+        $transport->setLocalDomain($domain);
+    }
+
+    public static function provideLocalDomainsWithControlCharacters(): iterable
+    {
+        yield 'CRLF' => ["evil\r\nMAIL FROM:<injected@example.org>"];
+        yield 'CR only' => ["example.org\r"];
+        yield 'LF only' => ["example.org\n"];
+        yield 'NUL byte' => ["example.org\x00"];
+        yield 'HTAB' => ["example.org\t"];
+        yield 'DEL (0x7F)' => ["example.org\x7F"];
+        yield 'control char in the middle' => ["exam\x01ple.org"];
     }
 
     public function testMessageIdFromServerIsEmbeddedInSentMessageEvent()

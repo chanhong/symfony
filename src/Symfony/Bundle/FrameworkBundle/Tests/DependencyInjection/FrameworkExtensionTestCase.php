@@ -15,9 +15,10 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\Attributes\IgnoreDeprecations;
 use PHPUnit\Framework\Attributes\RequiresMethod;
+use PHPUnit\Framework\Attributes\TestWith;
 use Psr\Cache\CacheItemPoolInterface;
-use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LogLevel;
+use Symfony\Bundle\FrameworkBundle\DependencyInjection\Compiler\JsonPathPass;
 use Symfony\Bundle\FrameworkBundle\DependencyInjection\FrameworkExtension;
 use Symfony\Bundle\FrameworkBundle\FrameworkBundle;
 use Symfony\Bundle\FrameworkBundle\Tests\DependencyInjection\Fixtures\Workflow\Validator\DefinitionValidator;
@@ -40,14 +41,16 @@ use Symfony\Component\DependencyInjection\Argument\ServiceClosureArgument;
 use Symfony\Component\DependencyInjection\Argument\ServiceLocatorArgument;
 use Symfony\Component\DependencyInjection\Argument\TaggedIteratorArgument;
 use Symfony\Component\DependencyInjection\ChildDefinition;
+use Symfony\Component\DependencyInjection\Compiler\AddBehaviorDescribingTagsPass;
+use Symfony\Component\DependencyInjection\Compiler\CheckDefinitionValidityPass;
 use Symfony\Component\DependencyInjection\Compiler\ResolveBindingsPass;
 use Symfony\Component\DependencyInjection\Compiler\ResolveChildDefinitionsPass;
-use Symfony\Component\DependencyInjection\Compiler\ResolveInstanceofConditionalsPass;
 use Symfony\Component\DependencyInjection\Compiler\ResolveTaggedIteratorArgumentPass;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\DependencyInjection\Definition;
 use Symfony\Component\DependencyInjection\Exception\LogicException;
+use Symfony\Component\DependencyInjection\Kernel\ServicesBundle;
 use Symfony\Component\DependencyInjection\Loader\ClosureLoader;
 use Symfony\Component\DependencyInjection\Loader\Configurator\ContainerConfigurator;
 use Symfony\Component\DependencyInjection\ParameterBag\EnvPlaceholderParameterBag;
@@ -65,6 +68,7 @@ use Symfony\Component\HttpClient\RetryableHttpClient;
 use Symfony\Component\HttpClient\ThrottlingHttpClient;
 use Symfony\Component\HttpFoundation\IpUtils;
 use Symfony\Component\HttpKernel\DependencyInjection\LoggerPass;
+use Symfony\Component\HttpKernel\EventListener\RateLimitAttributeListener;
 use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
@@ -177,6 +181,22 @@ abstract class FrameworkExtensionTestCase extends TestCase
         $cache = $container->getDefinition('cache.property_access');
         $this->assertNull($cache->getFactory());
         $this->assertSame(ArrayAdapter::class, $cache->getClass(), 'ArrayAdapter should be used in debug mode');
+    }
+
+    public function testRequestAndSessionValueResolversRunBeforeEntityValueResolver()
+    {
+        $container = $this->createContainerFromFile('full');
+
+        // DoctrineBundle ships EntityValueResolver at priority 110. Lower priorities trigger an
+        // entity-manager bootstrap on every Request/Session controller argument before the
+        // dedicated resolver is asked, costing tens of ms per request.
+        $entityValueResolverPriority = 110;
+
+        $requestTag = $container->getDefinition('argument_resolver.request')->getTag('controller.argument_value_resolver');
+        $this->assertGreaterThan($entityValueResolverPriority, $requestTag[0]['priority']);
+
+        $sessionTag = $container->getDefinition('argument_resolver.session')->getTag('controller.argument_value_resolver');
+        $this->assertGreaterThan($entityValueResolverPriority, $sessionTag[0]['priority']);
     }
 
     public function testCsrfProtectionNeedsSessionToBeEnabled()
@@ -819,6 +839,36 @@ abstract class FrameworkExtensionTestCase extends TestCase
         $this->assertSame(['_locale' => 'fr|en'], $container->getDefinition('routing.loader')->getArgument(2));
     }
 
+    public function testRouterRequestContextInlinesHostAndScheme()
+    {
+        $container = $this->createContainerFromFile('full');
+
+        // The host and scheme are inlined as plain values instead of being read through
+        // ParameterBag::all() at runtime, which would eagerly resolve every env var and
+        // fail during cache warmup when one of them is missing.
+        $requestContext = $container->getDefinition('router.request_context');
+        $this->assertSame('localhost', $requestContext->getArgument(1));
+        $this->assertSame('http', $requestContext->getArgument(2));
+    }
+
+    public function testRouterRequestContextUsesHostAndSchemeParameters()
+    {
+        $container = $this->createContainerFromClosure(function ($container) {
+            $container->setParameter('router.request_context.host', 'example.com');
+            $container->setParameter('router.request_context.scheme', 'https');
+            $container->loadFromExtension('framework', [
+                'http_method_override' => false,
+                'handle_all_throwables' => true,
+                'php_errors' => ['log' => true],
+                'router' => ['resource' => '%kernel.project_dir%/config/routing.xml'],
+            ]);
+        });
+
+        $requestContext = $container->getDefinition('router.request_context');
+        $this->assertSame('example.com', $requestContext->getArgument(1));
+        $this->assertSame('https', $requestContext->getArgument(2));
+    }
+
     public function testRouterEnabledLocalesWithEnvPlaceholders()
     {
         $container = $this->createContainerFromFile('router_enabled_locales_env');
@@ -1279,7 +1329,7 @@ abstract class FrameworkExtensionTestCase extends TestCase
             ...(class_exists(DecodeFailedMessageMiddleware::class) ? [['id' => 'decode_failed_message_middleware']] : []),
             ['id' => 'failed_message_processing_middleware'],
             ['id' => 'send_message', 'arguments' => [true]],
-            ['id' => 'handle_message', 'arguments' => [false]],
+            ['id' => 'handle_message', 'arguments' => ['index_1' => false]],
         ], $container->getParameter('messenger.bus.commands.middleware'));
         $this->assertTrue($container->has('messenger.bus.events'));
         $this->assertSame([], $container->getDefinition('messenger.bus.events')->getArgument(0));
@@ -1292,7 +1342,7 @@ abstract class FrameworkExtensionTestCase extends TestCase
             ['id' => 'failed_message_processing_middleware'],
             ['id' => 'with_factory', 'arguments' => ['foo', true, ['bar' => 'baz']]],
             ['id' => 'send_message', 'arguments' => [true]],
-            ['id' => 'handle_message', 'arguments' => [false]],
+            ['id' => 'handle_message', 'arguments' => ['index_1' => false]],
         ], $container->getParameter('messenger.bus.events.middleware'));
         $this->assertTrue($container->has('messenger.bus.queries'));
         $this->assertSame([], $container->getDefinition('messenger.bus.queries')->getArgument(0));
@@ -1325,7 +1375,7 @@ abstract class FrameworkExtensionTestCase extends TestCase
             ...(class_exists(DecodeFailedMessageMiddleware::class) ? [['id' => 'decode_failed_message_middleware']] : []),
             ['id' => 'failed_message_processing_middleware'],
             ['id' => 'send_message', 'arguments' => [true]],
-            ['id' => 'handle_message', 'arguments' => [false]],
+            ['id' => 'handle_message', 'arguments' => ['index_1' => false]],
         ], $container->getParameter('messenger.bus.events.middleware'));
     }
 
@@ -1348,7 +1398,7 @@ abstract class FrameworkExtensionTestCase extends TestCase
             ['id' => 'failed_message_processing_middleware'],
             ['id' => 'deduplicate_middleware'],
             ['id' => 'send_message', 'arguments' => [true]],
-            ['id' => 'handle_message', 'arguments' => [false]],
+            ['id' => 'handle_message', 'arguments' => ['index_1' => false]],
         ], $container->getParameter('messenger.bus.commands.middleware'));
         $this->assertTrue($container->has('messenger.bus.events'));
         $this->assertSame([], $container->getDefinition('messenger.bus.events')->getArgument(0));
@@ -1362,7 +1412,7 @@ abstract class FrameworkExtensionTestCase extends TestCase
             ['id' => 'deduplicate_middleware'],
             ['id' => 'with_factory', 'arguments' => ['foo', true, ['bar' => 'baz']]],
             ['id' => 'send_message', 'arguments' => [true]],
-            ['id' => 'handle_message', 'arguments' => [false]],
+            ['id' => 'handle_message', 'arguments' => ['index_1' => false]],
         ], $container->getParameter('messenger.bus.events.middleware'));
         $this->assertTrue($container->has('messenger.bus.queries'));
         $this->assertSame([], $container->getDefinition('messenger.bus.queries')->getArgument(0));
@@ -1690,6 +1740,16 @@ abstract class FrameworkExtensionTestCase extends TestCase
         $container = $this->createContainerFromFile('validation_translation_domain');
 
         $this->assertSame('messages', $container->getParameter('validator.translation_domain'));
+    }
+
+    public function testValidationPropertyMetadataExistenceCheck()
+    {
+        $container = $this->createContainerFromFile('validation_property_metadata_existence_check');
+
+        $calls = $container->getDefinition('validator.builder')->getMethodCalls();
+        $methods = array_column($calls, 0);
+
+        $this->assertContains('enablePropertyMetadataExistenceCheck', $methods);
     }
 
     public function testValidationMapping()
@@ -2064,6 +2124,22 @@ abstract class FrameworkExtensionTestCase extends TestCase
         $this->assertSame($redisUrl, $url);
     }
 
+    public function testCacheDefaultValkeyProvider()
+    {
+        $container = $this->createContainerFromFile('cache');
+
+        foreach (['cache.adapter.valkey', 'cache.adapter.valkey_tag_aware'] as $id) {
+            $this->assertTrue($container->hasDefinition($id), \sprintf('"%s" should be a service, not an alias.', $id));
+            $this->assertSame('cache.default_valkey_provider', $container->getDefinition($id)->getTag('cache.pool')[0]['provider']);
+        }
+
+        $valkeyUrl = 'valkey://valkey-host';
+        $providerId = '.cache_connection.'.ContainerBuilder::hash($valkeyUrl);
+
+        $this->assertTrue($container->hasDefinition($providerId));
+        $this->assertSame($valkeyUrl, $container->getDefinition($providerId)->getArgument(0));
+    }
+
     public function testCachePoolServices()
     {
         $container = $this->createContainerFromFile('cache', [], true, false);
@@ -2216,33 +2292,6 @@ abstract class FrameworkExtensionTestCase extends TestCase
         $this->assertSame('cache.taggable', $iterator->getTag());
         $this->assertSame('pool', $iterator->getIndexAttribute());
         $this->assertTrue($iterator->needsIndexes());
-    }
-
-    public function testRemovesResourceCheckerConfigCacheFactoryArgumentOnlyIfNoDebug()
-    {
-        $container = $this->createContainer(['kernel.debug' => true]);
-        (new FrameworkExtension())->load([], $container);
-        $this->assertCount(1, $container->getDefinition('config_cache_factory')->getArguments());
-
-        $container = $this->createContainer(['kernel.debug' => false]);
-        (new FrameworkExtension())->load([], $container);
-        $this->assertSame([], $container->getDefinition('config_cache_factory')->getArguments());
-    }
-
-    public function testLoggerAwareRegistration()
-    {
-        $container = $this->createContainerFromFile('full', [], true, false);
-        $container->addCompilerPass(new ResolveInstanceofConditionalsPass());
-        $container->register('foo', LoggerAwareInterface::class)
-            ->setAutoconfigured(true);
-        $container->compile();
-
-        $calls = $container->findDefinition('foo')->getMethodCalls();
-
-        $this->assertCount(1, $calls, 'Definition should contain 1 method call');
-        $this->assertSame('setLogger', $calls[0][0], 'Method name should be "setLogger"');
-        $this->assertInstanceOf(Reference::class, $calls[0][1][0]);
-        $this->assertSame('logger', (string) $calls[0][1][0], 'Argument should be a reference to "logger"');
     }
 
     public function testSessionCookieSecureAuto()
@@ -2448,6 +2497,16 @@ abstract class FrameworkExtensionTestCase extends TestCase
         $this->assertSame('foo.throttling.limiter', (string) $arguments[1]);
     }
 
+    public function testRateLimiterAttributeListener()
+    {
+        $container = $this->createContainerFromFile('http_client_rate_limiter');
+
+        $this->assertTrue($container->hasDefinition('rate_limiter.attribute_listener'));
+        $definition = $container->getDefinition('rate_limiter.attribute_listener');
+        $this->assertSame(RateLimitAttributeListener::class, $definition->getClass());
+        $this->assertTrue($definition->hasTag('kernel.event_subscriber'));
+    }
+
     public static function provideMailer(): iterable
     {
         yield [
@@ -2496,6 +2555,57 @@ abstract class FrameworkExtensionTestCase extends TestCase
         $this->assertNull($container->getDefinition('mailer.mailer')->getArgument(1));
     }
 
+    /**
+     * @param array{profiler?: bool|array<string, mixed>, test?: bool} $extraConfig
+     */
+    #[DataProvider('provideLoggerListenerRegistration')]
+    public function testLoggerListenerRegistration(string $serviceId, array $extraConfig, bool $expectedRegistered, bool $expectedGated)
+    {
+        $container = $this->createContainerFromClosure(static function (ContainerBuilder $container) use ($extraConfig) {
+            $container->loadFromExtension('framework', array_merge([
+                'http_method_override' => false,
+                'handle_all_throwables' => true,
+                'php_errors' => ['log' => true],
+                'secret' => 's3cr3t',
+                'mailer' => ['dsn' => 'smtp://null'],
+                'notifier' => ['texter_transports' => ['twilio' => 'twilio://ACCOUNT:TOKEN@default?from=FROM']],
+            ], $extraConfig));
+        });
+
+        $this->assertSame($expectedRegistered, $container->hasDefinition($serviceId));
+
+        if (!$expectedRegistered) {
+            return;
+        }
+
+        $arguments = $container->getDefinition($serviceId)->getArguments();
+
+        if ($expectedGated) {
+            $this->assertEquals(new Reference('profiler.is_disabled_state_checker', ContainerInterface::NULL_ON_INVALID_REFERENCE), $arguments[0]);
+        } else {
+            $this->assertSame([], $arguments);
+        }
+    }
+
+    public static function provideLoggerListenerRegistration(): iterable
+    {
+        $profiler = ['profiler' => ['enabled' => true]];
+
+        foreach (['mailer.message_logger_listener', 'notifier.notification_logger_listener'] as $serviceId) {
+            $name = substr($serviceId, 0, strpos($serviceId, '.'));
+
+            // Nothing consumes the retained messages, so the listener is dropped.
+            yield $name.': neither profiler nor test' => [$serviceId, [], false, false];
+
+            // The profiler consumes them, but only while it is collecting.
+            yield $name.': profiler only' => [$serviceId, $profiler, true, true];
+
+            // The assertions read the listener directly, so it must always collect.
+            yield $name.': test only' => [$serviceId, ['test' => true], true, false];
+            yield $name.': profiler and test' => [$serviceId, $profiler + ['test' => true], true, false];
+        }
+    }
+
     public function testMailerWithSpecificMessageBus()
     {
         $container = $this->createContainerFromFile('mailer_with_specific_message_bus');
@@ -2522,13 +2632,15 @@ abstract class FrameworkExtensionTestCase extends TestCase
         $this->assertTrue($container->hasDefinition('.http_client.mock_transport.my_factory'));
         $this->assertTrue($container->hasDefinition('.http_client.mock_transport.my_other_factory'));
 
+        // opted-out clients point at the undecorated real transport, renamed by the mock decoration
         $definition = $container->getDefinition('notMocked');
         $arguments = $definition->getArgument(0);
-        $this->assertSame('http_client.transport', (string) $arguments[0]);
+        $this->assertSame('http_client.transport.real', (string) $arguments[0]);
 
+        // "mocked" inherits the top-level factory, which decorates "http_client.transport" in place
         $definition = $container->getDefinition('mocked');
         $arguments = $definition->getArgument(0);
-        $this->assertSame('.http_client.mock_transport.my_factory', (string) $arguments[0]);
+        $this->assertSame('http_client.transport', (string) $arguments[0]);
 
         $definition = $container->getDefinition('mocked_custom_factory');
         $arguments = $definition->getArgument(0);
@@ -2542,32 +2654,122 @@ abstract class FrameworkExtensionTestCase extends TestCase
         $this->assertTrue($container->hasDefinition('http_client.mock_transport'));
         $this->assertTrue($container->hasDefinition('.http_client.mock_transport.my_response_factory'));
 
+        // opted-out clients point at the undecorated real transport, renamed by the mock decoration
         $definition = $container->getDefinition('notMocked');
         $arguments = $definition->getArgument(0);
-        $this->assertSame('http_client.transport', (string) $arguments[0]);
+        $this->assertSame('http_client.transport.real', (string) $arguments[0]);
 
+        // "mocked" inherits the top-level boolean factory, which decorates "http_client.transport" in place
         $definition = $container->getDefinition('mocked');
         $arguments = $definition->getArgument(0);
-        $this->assertSame('http_client.mock_transport', (string) $arguments[0]);
+        $this->assertSame('http_client.transport', (string) $arguments[0]);
 
         $definition = $container->getDefinition('mocked_with_factory');
         $arguments = $definition->getArgument(0);
         $this->assertSame('.http_client.mock_transport.my_response_factory', (string) $arguments[0]);
     }
 
+    public function testHttpClientRootClientMockedFromTopLevelFactory()
+    {
+        $container = $this->createContainerFromFile('http_client_mock_response_factory');
+
+        // The root client keeps using "http_client.transport"; the mock decorates it in place so decorators
+        // registered on "http_client.transport" are preserved.
+        $definition = $container->getDefinition('http_client');
+        $arguments = $definition->getArgument(0);
+        $this->assertCount(1, $arguments);
+        $this->assertInstanceOf(Reference::class, $arguments[0]);
+        $this->assertSame('http_client.transport', (string) $arguments[0]);
+
+        $decoratedService = $container->getDefinition('.http_client.mock_transport.my_factory')->getDecoratedService();
+        $this->assertSame('http_client.transport', $decoratedService[0]);
+        $this->assertSame('http_client.transport.real', $decoratedService[1]);
+        $this->assertSame(\PHP_INT_MAX, $decoratedService[2]);
+    }
+
+    public function testHttpClientRootClientMockedFromBooleanTopLevel()
+    {
+        $container = $this->createContainerFromFile('http_client_mock');
+
+        $definition = $container->getDefinition('http_client');
+        $arguments = $definition->getArgument(0);
+        $this->assertCount(1, $arguments);
+        $this->assertInstanceOf(Reference::class, $arguments[0]);
+        $this->assertSame('http_client.transport', (string) $arguments[0]);
+
+        $decoratedService = $container->getDefinition('http_client.mock_transport')->getDecoratedService();
+        $this->assertSame('http_client.transport', $decoratedService[0]);
+        $this->assertSame('http_client.transport.real', $decoratedService[1]);
+        $this->assertSame(\PHP_INT_MAX, $decoratedService[2]);
+    }
+
+    /**
+     * Configuring a mock response factory must decorate "http_client.transport" in place, not replace it as the
+     * transport referenced by "http_client". Otherwise any decorator registered on "http_client.transport" (a
+     * common way to add cross-cutting behavior, e.g. dispatching an event per request) is silently removed from
+     * the chain as soon as a mock factory is configured.
+     */
+    public function testHttpClientMockResponseFactoryKeepsTransportDecoratable()
+    {
+        $container = $this->createContainerFromFile('http_client_mock_response_factory');
+
+        // "http_client" keeps using "http_client.transport", so decorators registered on it stay in the chain.
+        $this->assertSame('http_client.transport', (string) $container->getDefinition('http_client')->getArgument(0)[0]);
+
+        // The mock is wired as the innermost decorator of "http_client.transport", not as its replacement, so
+        // decorators registered with any priority keep wrapping it.
+        $decoratedService = $container->getDefinition('.http_client.mock_transport.my_factory')->getDecoratedService();
+        $this->assertNotNull($decoratedService, 'The mock transport must decorate "http_client.transport".');
+        $this->assertSame('http_client.transport', $decoratedService[0]);
+        $this->assertSame(\PHP_INT_MAX, $decoratedService[2]);
+    }
+
+    public function testHttpClientRootClientNotMockedByDefault()
+    {
+        $container = $this->createContainerFromFile('http_client_scoped_without_query_option');
+
+        $definition = $container->getDefinition('http_client');
+        $arguments = $definition->getArgument(0);
+        $this->assertCount(1, $arguments);
+        $this->assertInstanceOf(Reference::class, $arguments[0]);
+        $this->assertSame('http_client.transport', (string) $arguments[0]);
+    }
+
     public function testRegisterParameterCollectingBehaviorDescribingTags()
     {
-        $container = $this->createContainerFromFile('default_config');
+        try {
+            $defaultTags = (new \ReflectionClassConstant(AddBehaviorDescribingTagsPass::class, 'DEFAULT_TAGS'))->getValue();
+        } catch (\ReflectionException) {
+            $defaultTags = [];
+        }
 
-        $this->assertTrue($container->hasParameter('container.behavior_describing_tags'));
-        $this->assertEquals([
+        if (!\in_array('proxy', $defaultTags, true)) {
+            $this->markTestSkipped('Requires symfony/dependency-injection registering "proxy" and "container.service_subscriber.locator" as default behavior-describing tags.');
+        }
+
+        $container = $this->createContainerFromFile('default_config', [], true, false);
+        $container->addCompilerPass(new AddBehaviorDescribingTagsPass([
             'container.do_not_inline',
             'container.service_locator',
             'container.service_subscriber',
             'kernel.event_subscriber',
             'kernel.event_listener',
-            'kernel.locale_aware',
             'kernel.reset',
+        ]));
+        $container->addCompilerPass(new AddBehaviorDescribingTagsPass(['kernel.locale_aware']));
+        $container->compile();
+
+        $this->assertTrue($container->hasParameter('container.behavior_describing_tags'));
+        $this->assertEquals([
+            'proxy',
+            'container.do_not_inline',
+            'container.service_locator',
+            'container.service_subscriber',
+            'container.service_subscriber.locator',
+            'kernel.event_subscriber',
+            'kernel.event_listener',
+            'kernel.reset',
+            'kernel.locale_aware',
         ], $container->getParameter('container.behavior_describing_tags'));
     }
 
@@ -2583,6 +2785,24 @@ abstract class FrameworkExtensionTestCase extends TestCase
         $container = $this->createContainerFromFile('notifier_without_messenger');
 
         $this->assertFalse($container->getDefinition('notifier.failed_message_listener')->hasTag('kernel.event_subscriber'));
+    }
+
+    public function testNotificationLoggerListenerIsResettable()
+    {
+        $container = $this->createContainerFromClosure(static function (ContainerBuilder $container) {
+            $container->loadFromExtension('framework', [
+                'http_method_override' => false,
+                'handle_all_throwables' => true,
+                'php_errors' => ['log' => true],
+                'secret' => 's3cr3t',
+                'test' => true,
+                'notifier' => ['texter_transports' => ['twilio' => 'twilio://ACCOUNT:TOKEN@default?from=FROM']],
+            ]);
+        });
+
+        // Otherwise a worker keeps every notification it ever sent, and the
+        // collector reports the ones from previous messages.
+        $this->assertSame([['method' => 'reset']], $container->getDefinition('notifier.notification_logger_listener')->getTag('kernel.reset'));
     }
 
     public function testNotifierWithMailerAndMessenger()
@@ -2795,6 +3015,31 @@ abstract class FrameworkExtensionTestCase extends TestCase
         $this->assertSame('Webhook-Signature', $container->getDefinition('webhook.signer')->getArgument(1));
     }
 
+    public function testWebhookRequestParserIsWiredWithTheConfiguredHeaderNames()
+    {
+        if (!class_exists(WebhookController::class)) {
+            $this->markTestSkipped('Webhook not available.');
+        }
+
+        $container = $this->createContainerFromClosure(static function (ContainerBuilder $container) {
+            $container->loadFromExtension('framework', [
+                'http_client' => ['enabled' => true],
+                'webhook' => [
+                    'enabled' => true,
+                    'signing_algorithm' => 'sha512',
+                    'signature_header_name' => 'X-Signature',
+                    'event_header_name' => 'X-Event',
+                    'id_header_name' => 'X-Id',
+                ],
+            ]);
+        });
+
+        $this->assertSame(
+            ['sha512', 'X-Signature', 'X-Event', 'X-Id'],
+            $container->getDefinition('webhook.request_parser')->getArguments()
+        );
+    }
+
     public function testWebhookWithoutSerializer()
     {
         if (!class_exists(WebhookController::class)) {
@@ -2812,9 +3057,31 @@ abstract class FrameworkExtensionTestCase extends TestCase
         $container = $this->createContainerFromFile('asset_mapper_without_assets');
 
         $this->assertTrue($container->has('asset_mapper'));
+        $this->assertSame([['method' => 'reset', 'on_invalid' => 'ignore']], $container->getDefinition('asset_mapper.cached_mapped_asset_factory')->getTag('kernel.reset'));
         $this->assertFalse($container->has('asset_mapper.asset_package'));
         $this->assertFalse($container->has('assets.packages'));
         $this->assertFalse($container->has('assets._default_package'));
+    }
+
+    #[TestWith([true, '/assets_path/'])]
+    #[TestWith([false, null])]
+    public function testAssetMapperDevServerPrefix(bool $server, ?string $expectedPrefix)
+    {
+        $container = $this->createContainerFromClosure(static function ($container) use ($server) {
+            $container->loadFromExtension('framework', [
+                'http_method_override' => false,
+                'handle_all_throwables' => true,
+                'php_errors' => ['log' => true],
+                'assets' => null,
+                'asset_mapper' => [
+                    'server' => $server,
+                    'public_prefix' => '/assets_path/',
+                    'paths' => ['assets/'],
+                ],
+            ]);
+        });
+
+        $this->assertSame($expectedPrefix, $container->getDefinition('asset_mapper.asset_package')->getArgument(3));
     }
 
     public function testDefaultLock()
@@ -3003,13 +3270,29 @@ abstract class FrameworkExtensionTestCase extends TestCase
                 ->setAutoconfigured(true);
         });
 
-        $this->assertEquals([['name' => 'upper', 'return_type' => FunctionReturnType::Value, 'arity' => 1]], $container->getDefinition('json_path.function.upper')->getTag('json_path.function'));
+        $this->assertSame([['name' => 'upper', 'return_type' => 'value', 'arity' => 1]], $container->getDefinition('json_path.function.upper')->getTag('json_path.function'));
 
         $locatorArgument = $container->getDefinition('json_path.crawler')->getArgument(0);
         $this->assertInstanceOf(ServiceLocatorArgument::class, $locatorArgument);
         $this->assertInstanceOf(TaggedIteratorArgument::class, $locatorArgument->getTaggedIteratorArgument());
         $this->assertSame('json_path.function', $locatorArgument->getTaggedIteratorArgument()->getTag());
         $this->assertSame('name', $locatorArgument->getTaggedIteratorArgument()->getIndexAttribute());
+    }
+
+    #[RequiresMethod(JsonPathCrawlerInterface::class, 'crawl')]
+    public function testJsonPathFunctionMetadataIsCollectedOnCompilation()
+    {
+        $container = $this->createContainerFromClosure(static function (ContainerBuilder $container) {
+            $container->loadFromExtension('framework', []);
+            $container->register('json_path.function.upper', UppercaseFunction::class)
+                ->setAutoconfigured(true);
+            $container->addCompilerPass(new JsonPathPass());
+        }, compile: false);
+
+        $container->getCompilerPassConfig()->setOptimizationPasses([new ResolveChildDefinitionsPass(), new CheckDefinitionValidityPass()]);
+        $container->compile();
+
+        $this->assertSame(['upper' => ['arity' => 1, 'return_type' => FunctionReturnType::Value]], $container->getDefinition('json_path.crawler')->getArgument(1));
     }
 
     public function testObjectMapperEnabled()
@@ -3051,7 +3334,7 @@ abstract class FrameworkExtensionTestCase extends TestCase
 
     protected function createContainer(array $data = [])
     {
-        return new ContainerBuilder(new EnvPlaceholderParameterBag(array_merge([
+        $container = new ContainerBuilder(new EnvPlaceholderParameterBag(array_merge([
             'kernel.bundles' => ['FrameworkBundle' => FrameworkBundle::class],
             'kernel.bundles_metadata' => ['FrameworkBundle' => ['namespace' => 'Symfony\\Bundle\\FrameworkBundle', 'path' => __DIR__.'/../..']],
             'kernel.cache_dir' => __DIR__,
@@ -3067,6 +3350,10 @@ abstract class FrameworkExtensionTestCase extends TestCase
             'container.build_id' => hash('crc32', 'Abc123423456789'),
             'container.build_time' => 23456789,
         ], $data)));
+
+        new ServicesBundle()->getContainerExtension()->load([], $container);
+
+        return $container;
     }
 
     protected function createContainerFromFile(string $file, array $data = [], bool $resetCompilerPasses = true, bool $compile = true, ?FrameworkExtension $extension = null): ContainerBuilder
@@ -3084,7 +3371,7 @@ abstract class FrameworkExtensionTestCase extends TestCase
             $container->getCompilerPassConfig()->setRemovingPasses([]);
             $container->getCompilerPassConfig()->setAfterRemovingPasses([]);
         }
-        $container->getCompilerPassConfig()->setBeforeOptimizationPasses([new LoggerPass()]);
+        $container->getCompilerPassConfig()->setBeforeOptimizationPasses([new AddBehaviorDescribingTagsPass(), new LoggerPass()]);
         $container->getCompilerPassConfig()->setBeforeRemovingPasses([new AddConstraintValidatorsPass(), new TranslatorPass()]);
 
         if (!$compile) {
@@ -3095,7 +3382,7 @@ abstract class FrameworkExtensionTestCase extends TestCase
         return self::$containerCache[$cacheKey] = $container;
     }
 
-    protected function createContainerFromClosure($closure, $data = []): ContainerBuilder
+    protected function createContainerFromClosure($closure, $data = [], bool $compile = true): ContainerBuilder
     {
         $container = $this->createContainer($data);
         $container->registerExtension(new FrameworkExtension());
@@ -3105,7 +3392,10 @@ abstract class FrameworkExtensionTestCase extends TestCase
         $container->getCompilerPassConfig()->setOptimizationPasses([]);
         $container->getCompilerPassConfig()->setRemovingPasses([]);
         $container->getCompilerPassConfig()->setAfterRemovingPasses([]);
-        $container->compile();
+
+        if ($compile) {
+            $container->compile();
+        }
 
         return $container;
     }

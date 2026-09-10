@@ -82,7 +82,11 @@ class Connection
 
     public function __destruct()
     {
-        $this->reset();
+        try {
+            $this->reset();
+        } catch (\Throwable) {
+            // requeuing in-transit messages on shutdown is best effort and must not throw from a destructor
+        }
     }
 
     /**
@@ -122,13 +126,13 @@ class Connection
 
         // check for extra keys in options
         $optionsExtraKeys = array_diff(array_keys($options), array_keys(self::DEFAULT_OPTIONS));
-        if (0 < \count($optionsExtraKeys)) {
+        if ($optionsExtraKeys) {
             throw new InvalidArgumentException(\sprintf('Unknown option found: [%s]. Allowed options are [%s].', implode(', ', $optionsExtraKeys), implode(', ', array_keys(self::DEFAULT_OPTIONS))));
         }
 
         // check for extra keys in options
         $queryExtraKeys = array_diff(array_keys($query), array_keys(self::DEFAULT_OPTIONS));
-        if (0 < \count($queryExtraKeys)) {
+        if ($queryExtraKeys) {
             throw new InvalidArgumentException(\sprintf('Unknown option found in DSN: [%s]. Allowed options are [%s].', implode(', ', $queryExtraKeys), implode(', ', array_keys(self::DEFAULT_OPTIONS))));
         }
 
@@ -159,10 +163,13 @@ class Connection
         }
         unset($query['region']);
 
+        $isAwsHost = false;
         if ('default' !== ($params['host'] ?? 'default')) {
             $clientConfiguration['endpoint'] = \sprintf('%s://%s%s', ($options['sslmode'] ?? null) === 'disable' ? 'http' : 'https', $params['host'], ($params['port'] ?? null) ? ':'.$params['port'] : '');
-            if (preg_match(';^sqs\.([^\.]++)\.amazonaws\.com$;', $params['host'], $matches)) {
+            // Every AWS partition that serves SQS under amazonaws: aws, aws-cn and aws-eusc
+            if (preg_match(';^sqs\.([^\.]++)\.amazonaws\.(?:com(?:\.cn)?|eu)$;', $params['host'], $matches)) {
                 $clientConfiguration['region'] = $matches[1];
+                $isAwsHost = true;
             }
         } elseif (self::DEFAULT_OPTIONS['endpoint'] !== $options['endpoint'] ?? self::DEFAULT_OPTIONS['endpoint']) {
             $clientConfiguration['endpoint'] = $options['endpoint'];
@@ -174,12 +181,12 @@ class Connection
         }
         $configuration['account'] = 2 === \count($parsedPath) ? $parsedPath[0] : $options['account'] ?? self::DEFAULT_OPTIONS['account'];
 
-        // When the DNS looks like a QueueUrl, we can directly inject it in the connection
+        // When the DSN looks like a QueueUrl, we can directly inject it in the connection
         // https://sqs.REGION.amazonaws.com/ACCOUNT/QUEUE
         $queueUrl = null;
         if (
-            'https' === $params['scheme']
-            && ($params['host'] ?? 'default') === "sqs.{$clientConfiguration['region']}.amazonaws.com"
+            $isAwsHost
+            && 'https' === $params['scheme']
             && ($params['path'] ?? '/') === "/{$configuration['account']}/{$configuration['queue_name']}"
         ) {
             $queueUrl = 'https://'.$params['host'].$params['path'];
@@ -357,7 +364,7 @@ class Connection
         return (int) ($attributes[QueueAttributeName::APPROXIMATE_NUMBER_OF_MESSAGES] ?? 0);
     }
 
-    public function send(string $body, array $headers, int $delay = 0, ?string $messageGroupId = null, ?string $messageDeduplicationId = null, ?string $xrayTraceId = null): void
+    public function send(string $body, array $headers, ?int $delay = null, ?string $messageGroupId = null, ?string $messageDeduplicationId = null, ?string $xrayTraceId = null): void
     {
         if ($this->configuration['auto_setup']) {
             $this->setup();
@@ -366,11 +373,14 @@ class Connection
         $parameters = [
             'QueueUrl' => $this->getQueueUrl(),
             'MessageBody' => $body,
-            // Maximum delay is 15 minutes. See https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-message-timers.html.
-            'DelaySeconds' => min(900, $delay),
             'MessageAttributes' => [],
             'MessageSystemAttributes' => [],
         ];
+
+        if (null !== $delay) {
+            // Maximum delay is 15 minutes. See https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-message-timers.html.
+            $parameters['DelaySeconds'] = min(900, $delay);
+        }
 
         $specialHeaders = [];
         foreach ($headers as $name => $value) {
@@ -412,10 +422,17 @@ class Connection
     public function reset(): void
     {
         if (null !== $this->currentResponse) {
-            // fetch current response in order to requeue in transit messages
-            if (!$this->fetchPendingMessages()) {
-                $this->currentResponse->cancel();
+            try {
+                // fetch current response in order to requeue in transit messages
+                if (!$this->fetchPendingMessages()) {
+                    $this->currentResponse->cancel();
+                    $this->currentResponse = null;
+                }
+            } catch (\Throwable) {
+                // discard the in-flight response that cannot be reused so the connection stays usable
+                $response = $this->currentResponse;
                 $this->currentResponse = null;
+                $response->cancel();
             }
         }
 

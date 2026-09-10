@@ -12,6 +12,7 @@
 namespace Symfony\Component\Messenger\Bridge\AmazonSqs\Tests\Transport;
 
 use AsyncAws\Core\Exception\Http\HttpException;
+use AsyncAws\Core\Exception\Http\NetworkException;
 use AsyncAws\Core\Test\ResultMockFactory;
 use AsyncAws\Sqs\Enum\QueueAttributeName;
 use AsyncAws\Sqs\Result\GetQueueUrlResult;
@@ -23,10 +24,15 @@ use Composer\InstalledVersions;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
+use Symfony\Component\HttpClient\Chunk\ErrorChunk;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
+use Symfony\Component\HttpClient\Response\ResponseStream;
 use Symfony\Component\Messenger\Bridge\AmazonSqs\Transport\Connection;
 use Symfony\Component\Messenger\Exception\TransportException;
+use Symfony\Contracts\HttpClient\HttpClientInterface;
+use Symfony\Contracts\HttpClient\ResponseInterface;
+use Symfony\Contracts\HttpClient\ResponseStreamInterface;
 
 class ConnectionTest extends TestCase
 {
@@ -128,6 +134,24 @@ class ConnectionTest extends TestCase
         $this->assertEquals(
             new Connection(['queue_name' => 'ab1-MyQueue-A2BCDEF3GHI4', 'account' => '123456789012'], new SqsClient(['region' => 'us-east-2', 'endpoint' => 'https://sqs.us-east-2.amazonaws.com', 'accessKeyId' => null, 'accessKeySecret' => null], null, $httpClient), 'https://sqs.us-east-2.amazonaws.com/123456789012/ab1-MyQueue-A2BCDEF3GHI4'),
             Connection::fromDsn('https://sqs.us-east-2.amazonaws.com/123456789012/ab1-MyQueue-A2BCDEF3GHI4', [], $httpClient)
+        );
+    }
+
+    public function testFromDsnWithNonComPartitionDetectsRegionAutomatically()
+    {
+        $httpClient = new MockHttpClient();
+        $this->assertEquals(
+            new Connection(['queue_name' => 'ab1-MyQueue-A2BCDEF3GHI4', 'account' => '123456789012'], new SqsClient(['region' => 'eusc-de-east-1', 'endpoint' => 'https://sqs.eusc-de-east-1.amazonaws.eu', 'accessKeyId' => null, 'accessKeySecret' => null], null, $httpClient), 'https://sqs.eusc-de-east-1.amazonaws.eu/123456789012/ab1-MyQueue-A2BCDEF3GHI4'),
+            Connection::fromDsn('https://sqs.eusc-de-east-1.amazonaws.eu/123456789012/ab1-MyQueue-A2BCDEF3GHI4', [], $httpClient)
+        );
+    }
+
+    public function testFromDsnWithChinaPartitionDetectsRegionAutomatically()
+    {
+        $httpClient = new MockHttpClient();
+        $this->assertEquals(
+            new Connection(['queue_name' => 'ab1-MyQueue-A2BCDEF3GHI4', 'account' => '123456789012'], new SqsClient(['region' => 'cn-north-1', 'endpoint' => 'https://sqs.cn-north-1.amazonaws.com.cn', 'accessKeyId' => null, 'accessKeySecret' => null], null, $httpClient), 'https://sqs.cn-north-1.amazonaws.com.cn/123456789012/ab1-MyQueue-A2BCDEF3GHI4'),
+            Connection::fromDsn('https://sqs.cn-north-1.amazonaws.com.cn/123456789012/ab1-MyQueue-A2BCDEF3GHI4', [], $httpClient)
         );
     }
 
@@ -338,6 +362,103 @@ class ConnectionTest extends TestCase
         $connection->get();
     }
 
+    public function testDestructDoesNotThrowWhenTheInFlightReceiveCannotBeResumed()
+    {
+        $httpClient = $this->createPollingClientThatCannotResume();
+        $client = new SqsClient(['region' => 'eu-west-1', 'accessKeyId' => 'key', 'accessKeySecret' => 'secret'], null, $httpClient);
+        $connection = new Connection(['queue_name' => 'queue', 'auto_setup' => false], $client, 'https://sqs.eu-west-1.amazonaws.com/123456789012/queue');
+
+        $this->assertNull($connection->get());
+
+        unset($connection);
+
+        $this->assertTrue($httpClient->response->getInfo('canceled'));
+    }
+
+    public function testResetDiscardsTheInFlightReceiveThatCannotBeResumed()
+    {
+        $httpClient = $this->createPollingClientThatCannotResume();
+        $client = new SqsClient(['region' => 'eu-west-1', 'accessKeyId' => 'key', 'accessKeySecret' => 'secret'], null, $httpClient);
+        $connection = new Connection(['queue_name' => 'queue', 'auto_setup' => false], $client, 'https://sqs.eu-west-1.amazonaws.com/123456789012/queue');
+
+        $this->assertNull($connection->get());
+
+        $connection->reset();
+
+        $this->assertTrue($httpClient->response->getInfo('canceled'));
+    }
+
+    public function testDestructDoesNotThrowOnNetworkFailure()
+    {
+        $httpClient = new MockHttpClient(new MockResponse('', ['error' => 'Connection timed out']));
+        $client = new SqsClient(['region' => 'eu-west-1', 'accessKeyId' => 'key', 'accessKeySecret' => 'secret'], null, $httpClient);
+        $connection = new Connection(['queue_name' => 'queue', 'auto_setup' => false], $client, 'https://sqs.eu-west-1.amazonaws.com/123456789012/queue');
+
+        try {
+            $connection->get();
+            $this->fail('The receive should have failed.');
+        } catch (NetworkException) {
+        }
+
+        unset($connection);
+
+        $this->addToAssertionCount(1);
+    }
+
+    public function testResetDiscardsTheFailedResponseOnNetworkFailure()
+    {
+        $httpClient = new MockHttpClient(new MockResponse('', ['error' => 'Connection timed out']));
+        $client = new SqsClient(['region' => 'eu-west-1', 'accessKeyId' => 'key', 'accessKeySecret' => 'secret'], null, $httpClient);
+        $connection = new Connection(['queue_name' => 'queue', 'auto_setup' => false], $client, 'https://sqs.eu-west-1.amazonaws.com/123456789012/queue');
+
+        try {
+            $connection->get();
+            $this->fail('The receive should have failed.');
+        } catch (NetworkException) {
+        }
+
+        $connection->reset();
+
+        $this->addToAssertionCount(1);
+    }
+
+    /**
+     * Simulates an in-flight ReceiveMessage long-poll: the first stream() call times out,
+     * leaving the response pending, and any later attempt to resume it throws, like
+     * HttpClient decorators do when the underlying response was already consumed.
+     */
+    private function createPollingClientThatCannotResume(): HttpClientInterface
+    {
+        return new class implements HttpClientInterface {
+            public ?MockResponse $response = null;
+            private int $streamCalls = 0;
+
+            public function request(string $method, string $url, array $options = []): ResponseInterface
+            {
+                return $this->response = new MockResponse();
+            }
+
+            public function stream($responses, ?float $timeout = null): ResponseStreamInterface
+            {
+                if (++$this->streamCalls > 1) {
+                    throw new \LogicException('Instance of "Symfony\Component\HttpClient\Response\CurlResponse" is already consumed and cannot be managed by "Symfony\Component\HttpClient\Response\AsyncResponse". A decorated client should not call any of the response\'s methods in its "request()" method.');
+                }
+
+                $response = $this->response;
+                $timeoutChunk = new ErrorChunk(0, 'Idle timeout reached');
+
+                return new ResponseStream((static function () use ($response, $timeoutChunk) {
+                    yield $response => $timeoutChunk;
+                })());
+            }
+
+            public function withOptions(array $options): static
+            {
+                return $this;
+            }
+        };
+    }
+
     #[DataProvider('provideQueueUrl')]
     public function testInjectQueueUrl(string $dsn, string $queueUrl)
     {
@@ -354,6 +475,8 @@ class ConnectionTest extends TestCase
         yield ['https://sqs.us-east-2.amazonaws.com/123456/queue', 'https://sqs.us-east-2.amazonaws.com/123456/queue'];
         yield ['https://KEY:SECRET@sqs.us-east-2.amazonaws.com/123456/queue', 'https://sqs.us-east-2.amazonaws.com/123456/queue'];
         yield ['https://sqs.us-east-2.amazonaws.com/123456/queue?auto_setup=1', 'https://sqs.us-east-2.amazonaws.com/123456/queue'];
+        yield ['https://sqs.eusc-de-east-1.amazonaws.eu/123456/queue', 'https://sqs.eusc-de-east-1.amazonaws.eu/123456/queue'];
+        yield ['https://sqs.cn-north-1.amazonaws.com.cn/123456/queue', 'https://sqs.cn-north-1.amazonaws.com.cn/123456/queue'];
     }
 
     #[DataProvider('provideNotQueueUrl')]
@@ -372,6 +495,8 @@ class ConnectionTest extends TestCase
         yield ['https://sqs.us-east-2.amazonaws.com/queue'];
         yield ['https://us-east-2/123456/ab1-MyQueue-A2BCDEF3GHI4'];
         yield ['sqs://default/queue'];
+        yield ['https://sqs.us-east-2.amazonaws.evil.com/123456/queue'];
+        yield ['https://sqs.us-east-2.amazonaws.co.uk/123456/queue'];
     }
 
     public function testGetQueueUrlNotCalled()

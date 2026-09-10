@@ -281,6 +281,43 @@ class DecoratorServicePassTest extends TestCase
         $this->assertEquals(['bar' => ['attr' => 'baz'], 'foobar' => ['attr' => 'bar'], 'container.decorator' => [['id' => 'foo', 'inner' => 'baz.inner']]], $container->getDefinition('baz')->getTags());
     }
 
+    public function testProcessMovesRoleDescribingTagsWithoutBehaviorDescribingTagsParameter()
+    {
+        $container = new ContainerBuilder();
+        $container
+            ->register('foo')
+            ->setTags(['container.service_locator' => [0 => []], 'kernel.event_listener' => [['event' => 'foo']]])
+        ;
+        $container
+            ->register('baz')
+            ->setDecoratedService('foo')
+        ;
+
+        $this->process($container);
+
+        $this->assertEquals(['container.service_locator' => [0 => []]], $container->getDefinition('baz.inner')->getTags());
+        $this->assertEquals(['kernel.event_listener' => [['event' => 'foo']], 'container.decorator' => [['id' => 'foo', 'inner' => 'baz.inner']]], $container->getDefinition('baz')->getTags());
+    }
+
+    public function testProcessLeavesBehaviorDescribingTagsFromParameterOnOriginalDefinition()
+    {
+        $container = new ContainerBuilder();
+        $container->setParameter('container.behavior_describing_tags', ['container.service_locator', 'logger_aware']);
+        $container
+            ->register('foo')
+            ->setTags(['container.service_locator' => [0 => []], 'logger_aware' => [[]], 'kernel.event_listener' => [['event' => 'foo']]])
+        ;
+        $container
+            ->register('baz')
+            ->setDecoratedService('foo')
+        ;
+
+        $this->process($container);
+
+        $this->assertEquals(['container.service_locator' => [0 => []], 'logger_aware' => [[]]], $container->getDefinition('baz.inner')->getTags());
+        $this->assertEquals(['kernel.event_listener' => [['event' => 'foo']], 'container.decorator' => [['id' => 'foo', 'inner' => 'baz.inner']]], $container->getDefinition('baz')->getTags());
+    }
+
     public function testCannotDecorateSyntheticService()
     {
         $container = new ContainerBuilder();

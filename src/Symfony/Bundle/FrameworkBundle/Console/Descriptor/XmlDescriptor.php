@@ -110,7 +110,7 @@ class XmlDescriptor extends Descriptor
             throw new RuntimeException('The deprecation file does not exist, please try warming the cache first.');
         }
 
-        $logs = unserialize(file_get_contents($containerDeprecationFilePath));
+        $logs = unserialize(file_get_contents($containerDeprecationFilePath), ['allowed_classes' => false]);
 
         $dom = new \DOMDocument('1.0', 'UTF-8');
         $dom->appendChild($deprecationsXML = $dom->createElement('deprecations'));
@@ -365,7 +365,7 @@ class XmlDescriptor extends Descriptor
         $serviceXML->setAttribute('file', $definition->getFile() ?? '');
 
         $calls = $definition->getMethodCalls();
-        if (\count($calls) > 0) {
+        if ($calls) {
             $serviceXML->appendChild($callsXML = $dom->createElement('calls'));
             foreach ($calls as $callData) {
                 $callsXML->appendChild($callXML = $dom->createElement('call'));

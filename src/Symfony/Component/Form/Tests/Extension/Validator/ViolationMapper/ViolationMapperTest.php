@@ -28,6 +28,9 @@ use Symfony\Component\Form\Tests\Extension\Validator\ViolationMapper\Fixtures\Is
 use Symfony\Component\Form\Tests\Fixtures\DummyFormRendererEngine;
 use Symfony\Component\Form\Tests\Fixtures\FixedTranslator;
 use Symfony\Component\PropertyAccess\PropertyPath;
+use Symfony\Component\Translation\Loader\ArrayLoader;
+use Symfony\Component\Translation\TranslatableMessage;
+use Symfony\Component\Translation\Translator;
 use Symfony\Component\Validator\Constraints\File;
 use Symfony\Component\Validator\ConstraintViolation;
 use Symfony\Component\Validator\ConstraintViolationInterface;
@@ -1571,6 +1574,72 @@ class ViolationMapperTest extends TestCase
         $this->assertEquals([$this->getFormError($violation3, $grandChild3)], iterator_to_array($grandChild3->getErrors()), $grandChild3->getName().' should have an error, but has none');
     }
 
+    public function testMapErrorToChildWhoseNameIsTheSnakeCasedProperty()
+    {
+        $violation = $this->getConstraintViolation('data.discountPrice');
+        $parent = $this->getForm('parent');
+        $child = $this->getForm('discount_price', 'discount_price');
+
+        $parent->add($child);
+        $parent->submit([]);
+
+        $this->mapper->mapViolation($violation, $parent);
+
+        $this->assertCount(0, $parent->getErrors(), $parent->getName().' should not have an error, but has one');
+        $this->assertEquals([$this->getFormError($violation, $child)], iterator_to_array($child->getErrors()), $child->getName().' should have an error, but has none');
+    }
+
+    public function testMapErrorToNestedChildWhoseNameIsTheSnakeCasedProperty()
+    {
+        $violation = $this->getConstraintViolation('data.billingAddress.zipCode');
+        $parent = $this->getForm('parent');
+        $child = $this->getForm('billing_address', 'billing_address');
+        $grandChild = $this->getForm('zip_code', 'zip_code');
+
+        $parent->add($child);
+        $child->add($grandChild);
+        $parent->submit([]);
+
+        $this->mapper->mapViolation($violation, $parent);
+
+        $this->assertCount(0, $parent->getErrors(), $parent->getName().' should not have an error, but has one');
+        $this->assertCount(0, $child->getErrors(), $child->getName().' should not have an error, but has one');
+        $this->assertEquals([$this->getFormError($violation, $grandChild)], iterator_to_array($grandChild->getErrors()), $grandChild->getName().' should have an error, but has none');
+    }
+
+    public function testPreferTheChildMatchingThePropertyPathExactly()
+    {
+        $violation = $this->getConstraintViolation('data.discountPrice');
+        $parent = $this->getForm('parent');
+        $snakeCased = $this->getForm('discount_price', 'discount_price');
+        $camelCased = $this->getForm('discountPrice', 'discountPrice');
+
+        $parent->add($snakeCased);
+        $parent->add($camelCased);
+        $parent->submit([]);
+
+        $this->mapper->mapViolation($violation, $parent);
+
+        $this->assertCount(0, $parent->getErrors(), $parent->getName().' should not have an error, but has one');
+        $this->assertCount(0, $snakeCased->getErrors(), $snakeCased->getName().' should not have an error, but has one');
+        $this->assertEquals([$this->getFormError($violation, $camelCased)], iterator_to_array($camelCased->getErrors()), $camelCased->getName().' should have an error, but has none');
+    }
+
+    public function testDoNotMapErrorToChildWhoseArrayKeyOnlyDiffersInCase()
+    {
+        $violation = $this->getConstraintViolation('data[discountPrice]');
+        $parent = $this->getForm('parent');
+        $child = $this->getForm('discount_price', '[discount_price]');
+
+        $parent->add($child);
+        $parent->submit([]);
+
+        $this->mapper->mapViolation($violation, $parent);
+
+        $this->assertEquals([$this->getFormError($violation, $parent)], iterator_to_array($parent->getErrors()), $parent->getName().' should have an error, but has none');
+        $this->assertCount(0, $child->getErrors(), $child->getName().' should not have an error, but has one');
+    }
+
     public function testMessageWithLabel1()
     {
         $this->mapper = new ViolationMapper(new FormRenderer(new DummyFormRendererEngine()), new FixedTranslator(['Name' => 'Custom Name']));
@@ -1625,6 +1694,44 @@ class ViolationMapperTest extends TestCase
             /** @var FormError $error */
             $error = $errors[0];
             $this->assertSame('Message Translated Label', $error->getMessage());
+        }
+    }
+
+    public function testMessageWithTranslatableLabel()
+    {
+        $translator = new Translator('en');
+        $translator->addLoader('array', new ArrayLoader());
+        $translator->addResource('array', ['options_label' => 'Translated %what% Label'], 'en', 'custom_domain');
+
+        $this->mapper = new ViolationMapper(null, $translator);
+
+        $parent = $this->getForm('parent');
+
+        $config = new FormConfigBuilder('name', null, $this->dispatcher, [
+            'error_mapping' => [],
+            'label' => new TranslatableMessage('options_label', ['%what%' => 'Custom'], 'custom_domain'),
+        ]);
+        $config->setMapped(true);
+        $config->setInheritData(false);
+        $config->setPropertyPath('name');
+        $config->setCompound(true);
+        $config->setDataMapper(new DataMapper());
+
+        $child = new Form($config);
+        $parent->add($child);
+
+        $parent->submit([]);
+
+        $violation = new ConstraintViolation('Message {{ label }}', null, [], null, 'data.name', null);
+        $this->mapper->mapViolation($violation, $parent);
+
+        $this->assertCount(1, $child->getErrors(), $child->getName().' should have an error, but has none');
+
+        $errors = iterator_to_array($child->getErrors());
+        if (isset($errors[0])) {
+            /** @var FormError $error */
+            $error = $errors[0];
+            $this->assertSame('Message Translated Custom Label', $error->getMessage());
         }
     }
 

@@ -65,6 +65,7 @@ final class ImportMapOutdatedCommand extends Command
                 The <info>--format</info> option specifies the format of the command output:
 
                   <info>php %command.full_name% --format=json</info>
+
                 EOT
             );
     }
@@ -75,7 +76,7 @@ final class ImportMapOutdatedCommand extends Command
         $packages = $input->getArgument('packages');
         $packagesUpdateInfos = $this->updateChecker->getAvailableUpdates($packages);
         $packagesUpdateInfos = array_filter($packagesUpdateInfos, static fn ($packageUpdateInfo) => $packageUpdateInfo->hasUpdate());
-        if (0 === \count($packagesUpdateInfos)) {
+        if (!$packagesUpdateInfos) {
             if ('json' === $input->getOption('format')) {
                 $io->writeln('[]');
             } else {

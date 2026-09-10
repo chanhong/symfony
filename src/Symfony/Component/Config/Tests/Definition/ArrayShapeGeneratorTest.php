@@ -97,6 +97,73 @@ class ArrayShapeGeneratorTest extends TestCase
         $this->assertStringContainsString($expected, ArrayShapeGenerator::generate($root));
     }
 
+    public function testPrototypedArrayNodePhpDocWithAcceptAndWrap()
+    {
+        $proto = new ArrayNodeDefinition('proto');
+        $proto
+            ->useAttributeAsKey('name')
+            ->acceptAndWrap(['string', 'backed-enum'])
+            ->prototype('scalar')->end();
+
+        $root = new ArrayNodeDefinition('root');
+        $root->append($proto);
+
+        $expected = "array{\n *     proto?: \BackedEnum|\Symfony\Component\Config\Loader\ParamConfigurator|string|array<string, scalar|\Symfony\Component\Config\Loader\ParamConfigurator|null>,\n * }";
+
+        $this->assertStringContainsString($expected, ArrayShapeGenerator::generate($root->getNode()));
+    }
+
+    public function testPrototypedArrayNodePhpDocWithStringAcceptAndWrap()
+    {
+        $proto = new ArrayNodeDefinition('proto');
+        $proto
+            ->useAttributeAsKey('name')
+            ->acceptAndWrap(['string'])
+            ->prototype('scalar')->end();
+
+        $root = new ArrayNodeDefinition('root');
+        $root->append($proto);
+
+        $expected = 'proto?: \Symfony\Component\Config\Loader\ParamConfigurator|string|array<string, scalar|\Symfony\Component\Config\Loader\ParamConfigurator|null>,';
+
+        $this->assertStringContainsString($expected, ArrayShapeGenerator::generate($root->getNode()));
+    }
+
+    public function testPhpDocWithAcceptAndWrapOnPlainArrayNode()
+    {
+        $child = new ArrayNodeDefinition('child');
+        $child
+            ->acceptAndWrap(['string'], 'value')
+            ->children()
+                ->scalarNode('value')->end()
+            ->end();
+
+        $root = new ArrayNodeDefinition('root');
+        $root->append($child);
+
+        $expected = 'child?: \Symfony\Component\Config\Loader\ParamConfigurator|string|array{';
+
+        $this->assertStringContainsString($expected, ArrayShapeGenerator::generate($root->getNode()));
+    }
+
+    public function testArrayPrototypePhpDoc()
+    {
+        $proto = new ArrayNodeDefinition('proto');
+        $proto
+            ->arrayPrototype()
+                ->children()
+                    ->booleanNode('nested')->end()
+                ->end()
+            ->end();
+
+        $root = new ArrayNodeDefinition('root');
+        $root->append($proto);
+
+        $expected = "array{\n *     proto?: list<array{ // Default: []\n *         nested?: bool|\Symfony\Component\Config\Loader\ParamConfigurator,\n *     }>,\n * }";
+
+        $this->assertStringContainsString($expected, ArrayShapeGenerator::generate($root->getNode()));
+    }
+
     public function testPhpDocHandlesRequiredNode()
     {
         $child = new BooleanNode('node');
@@ -148,6 +215,25 @@ class ArrayShapeGeneratorTest extends TestCase
         $this->assertStringContainsString('node?: bool|\Symfony\Component\Config\Loader\ParamConfigurator, // Deprecated: The "node" option is deprecated. // This is a boolean node. Set to true to enable it. Set to false to disable it. // Default: true', ArrayShapeGenerator::generate($root));
     }
 
+    public function testPhpDocDoesNotCloseCommentBlock()
+    {
+        $child = new ScalarNode('schedule');
+        $child->setInfo('Cron expression for when normal/incremental syncs should run');
+        $child->setDefaultValue('*/30 * * * *');
+
+        $root = new ArrayNode('root');
+        $root->addChild($child);
+        $root->addChild(new EnumNode('preset', values: ['*/5 * * * *', '*/30 * * * *']));
+
+        $generated = ArrayShapeGenerator::generate($root);
+
+        // A "*/" in the info, default value or an enum value would prematurely close the surrounding doc block and generate invalid PHP.
+        $this->assertStringNotContainsString('*/', $generated);
+        // The slash is escaped so the values stay recognizable instead of being dropped.
+        $this->assertStringContainsString('*\\/30 * * * *', $generated);
+        $this->assertStringContainsString('"*\\/5 * * * *"|"*\\/30 * * * *"', $generated);
+    }
+
     public function testPhpDocShapeSingleLevel()
     {
         $root = new ArrayNode('root');
@@ -186,6 +272,28 @@ class ArrayShapeGeneratorTest extends TestCase
              *     enabled?: bool|\Symfony\Component\Config\Loader\ParamConfigurator, // Default: true
              * }
             CODE, ArrayShapeGenerator::generate($root->getNode()));
+    }
+
+    public function testBeforeNormalizationIfTrueMakesArrayShapeUnsealed()
+    {
+        $root = new ArrayNodeDefinition('root');
+        $root
+            ->children()
+                ->scalarNode('child')->end()
+            ->end()
+            ->beforeNormalization()
+                ->ifTrue(static fn ($v) => \is_array($v) && isset($v['extra']))
+                ->then(static fn ($v) => $v)
+            ->end();
+
+        $shape = ArrayShapeGenerator::generate($root->getNode());
+
+        $this->assertStringContainsString(<<<'CODE'
+            array{
+             *     child?: scalar|\Symfony\Component\Config\Loader\ParamConfigurator|null,
+             *     ...<string, mixed>
+             * }
+            CODE, $shape);
     }
 
     #[DataProvider('provideQuotedNodes')]

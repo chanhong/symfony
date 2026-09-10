@@ -1,7 +1,7 @@
 name: Windows
 
 on:
-  push:
+  push: { branches: [ '*.*' ] }
   pull_request:
 
 concurrency:
@@ -34,15 +34,16 @@ jobs:
           git config --global user.name "Symfony"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 2
 
       - name: Setup PHP
         run: |
           $env:Path = 'c:\php;' + $env:Path
           mkdir c:\php && cd c:\php
-          iwr -outf php.zip https://github.com/symfony/binary-utils/releases/download/v0.1/php-8.4.0-Win32-vs17-x86.zip
+          iwr -outf php.zip https://github.com/symfony/binary-utils/releases/download/v0.1/php-8.4.1-Win32-vs17-x86.zip
           7z x php.zip -y >nul
           Copy php.ini-development php.ini
           "memory_limit=-1" >> php.ini
@@ -93,7 +94,7 @@ jobs:
           # HttpClient tests need to run separately, they timeout otherwise
           $hcJob = Start-Job -ScriptBlock {
             Set-Location $using:workingDir
-            & php phpunit src\Symfony\Component\HttpClient 2>&1 | Out-File -FilePath "hc.log" -Encoding utf8
+            & php phpunit src\Symfony\Component\HttpClient --exclude-group tty --exclude-group benchmark --exclude-group intl-data --exclude-group network --exclude-group transient-on-windows 2>&1 | Out-File -FilePath "hc.log" -Encoding utf8
             return $LASTEXITCODE
           }
           sleep 10
@@ -135,15 +136,16 @@ jobs:
           git config --global user.name "Symfony"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 2
 
       - name: Setup PHP
         run: |
           $env:Path = 'c:\php;' + $env:Path
           mkdir c:\php && cd c:\php
-          iwr -outf php.zip https://github.com/symfony/binary-utils/releases/download/v0.1/php-8.4.0-Win32-vs17-x86.zip
+          iwr -outf php.zip https://github.com/symfony/binary-utils/releases/download/v0.1/php-8.4.1-Win32-vs17-x86.zip
           7z x php.zip -y >nul
           cd ext
           iwr -outf php_apcu.zip https://github.com/symfony/binary-utils/releases/download/v0.1/php_apcu-5.1.24-8.4-ts-vs17-x86.zip

@@ -200,7 +200,7 @@ class TranslationExtractCommand extends Command
             : new MergeOperation($currentCatalogue, $extractedCatalogue);
 
         // Exit if no messages found.
-        if (!\count($operation->getDomains())) {
+        if (!$operation->getDomains()) {
             $errorIo->warning('No translation messages were found.');
 
             return 0;
@@ -495,9 +495,11 @@ class TranslationExtractCommand extends Command
 
     private function removeNoFillTranslations(MessageCatalogueInterface $operation): void
     {
-        foreach ($operation->all('messages') as $key => $message) {
-            if (str_starts_with($message, self::NO_FILL_PREFIX)) {
-                $operation->set($key, '', 'messages');
+        foreach ($operation->getDomains() as $domain) {
+            foreach ($operation->all($domain) as $key => $message) {
+                if (str_starts_with($message, self::NO_FILL_PREFIX)) {
+                    $operation->set($key, '', $domain);
+                }
             }
         }
     }

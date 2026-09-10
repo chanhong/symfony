@@ -191,6 +191,73 @@ class TableTest extends TestCase
 
                     TABLE,
             ],
+            'box style without headers' => [
+                [],
+                [
+                    ['A', '1'],
+                    ['B', '2'],
+                ],
+                'box',
+                <<<'TABLE'
+                    ┌───┬───┐
+                    │ A │ 1 │
+                    │ B │ 2 │
+                    └───┴───┘
+
+                    TABLE,
+            ],
+            'box style with an empty header row' => [
+                [[]],
+                [
+                    ['A', '1'],
+                    ['B', '2'],
+                ],
+                'box',
+                <<<'TABLE'
+                    ┌───┬───┐
+                    │ A │ 1 │
+                    │ B │ 2 │
+                    └───┴───┘
+
+                    TABLE,
+            ],
+            // box-double defines no single-line ┬/┴, so colspan separators reuse the double-horizontal ╤/╧ junctions
+            'box-double style with colspans' => [
+                ['Col 1', 'Col 2', 'Col 3'],
+                [
+                    [new TableCell('spans two', ['colspan' => 2]), 'c'],
+                    new TableSeparator(),
+                    ['a', new TableCell('spans two', ['colspan' => 2])],
+                ],
+                'box-double',
+                <<<'TABLE'
+                    ╔═══════╤═══════╤═══════╗
+                    ║ Col 1 │ Col 2 │ Col 3 ║
+                    ╠═══════╧═══════╪═══════╣
+                    ║ spans two     │ c     ║
+                    ╟───────╤───────╧───────╢
+                    ║ a     │ spans two     ║
+                    ╚═══════╧═══════════════╝
+
+                    TABLE,
+            ],
+            'box style with a header spanning all columns' => [
+                [new TableCell('Books', ['colspan' => 2])],
+                [
+                    ['A', '1'],
+                    ['B', '2'],
+                ],
+                'box',
+                <<<'TABLE'
+                    ┌──────────┐
+                    │ Books    │
+                    ├─────┬────┤
+                    │ A   │ 1  │
+                    │ B   │ 2  │
+                    └─────┴────┘
+
+                    TABLE,
+            ],
             [
                 ['ISBN', 'Title'],
                 [
@@ -336,14 +403,14 @@ class TableTest extends TestCase
                     | 99921-58-10-7                 | Divine Comedy                 | Dante Alighieri             |
                     +-------------------------------+-------------------------------+-----------------------------+
                     | Divine Comedy(Dante Alighieri)                                                              |
-                    +-------------------------------+-------------------------------+-----------------------------+
+                    +---------------------------------------------------------------+-----------------------------+
                     | Arduino: A Quick-Start Guide                                  | Mark Schmidt                |
                     +-------------------------------+-------------------------------+-----------------------------+
                     | 9971-5-0210-0                 | A Tale of                                                   |
                     |                               | Two Cities                                                  |
-                    +-------------------------------+-------------------------------+-----------------------------+
+                    +-------------------------------+-------------------------------------------------------------+
                     | Cupìdĭtâte díctá âtquè pôrrò, tèmpórà exercitátìónèm mòdí ânìmí núllà nèmò vèl níhìl!       |
-                    +-------------------------------+-------------------------------+-----------------------------+
+                    +---------------------------------------------------------------------------------------------+
 
                     TABLE,
             ],
@@ -362,7 +429,7 @@ class TableTest extends TestCase
                     +-----+-----+-----+
                     | foo       | baz |
                     | bar       | qux |
-                    +-----+-----+-----+
+                    +-----------+-----+
 
                     TABLE,
             ],
@@ -382,7 +449,7 @@ class TableTest extends TestCase
                     | foo       | baz  |
                     | bar       | qux  |
                     |           | quux |
-                    +-----+-----+------+
+                    +-----------+------+
 
                     TABLE,
             ],
@@ -444,7 +511,7 @@ class TableTest extends TestCase
                     | Dante Alighieri  | 9971-5-0210-0             |
                     | J. R. R. Tolkien |                           |
                     | J. R. R          |                           |
-                    +------------------+---------+-----------------+
+                    +------------------+---------------------------+
 
                     TABLE,
             ],
@@ -487,7 +554,7 @@ class TableTest extends TestCase
                     | -5-                     | Alighieri       |
                     | 021                     |                 |
                     | 0-0                     |                 |
-                    +-----------------+-------+-----------------+
+                    +-------------------------+-----------------+
 
                     TABLE,
             ],
@@ -518,7 +585,7 @@ class TableTest extends TestCase
                     | Charles Dickens | -5-                     |
                     |                 | 021                     |
                     |                 | 0-0                     |
-                    +-----------------+-------+-----------------+
+                    +-----------------+-------------------------+
 
                     TABLE,
             ],
@@ -552,7 +619,7 @@ class TableTest extends TestCase
                 [],
                 'default',
                 <<<'TABLE'
-                    +------+-------+--------+
+                    +-----------------------+
                     | Main title            |
                     +------+-------+--------+
                     | ISBN | Title | Author |
@@ -572,9 +639,9 @@ class TableTest extends TestCase
                 ],
                 'default',
                 <<<'TABLE'
-                    +---+--+--+---+--+---+--+---+--+
+                    +---------+------+------+------+
                     | 1       | 2    | 3    | 4    |
-                    +---+--+--+---+--+---+--+---+--+
+                    +---------+------+------+------+
 
                     TABLE,
             ],
@@ -595,9 +662,9 @@ class TableTest extends TestCase
                 ],
                 'default',
                 <<<TABLE
-                    +-----------------+------------------+---------+
+                    +----------------------------------------------+
                     |\033[32m \033[39m\033[33mLong Title\033[39m\033[32m                                   \033[39m|
-                    +-----------------+------------------+---------+
+                    +----------------------------------------------+
                     | 9971-5-0210-0                                |
                     +-----------------+------------------+---------+
                     | Dante Alighieri | J. R. R. Tolkien | J. R. R |
@@ -623,7 +690,7 @@ class TableTest extends TestCase
                 ],
                 'default',
                 <<<'TABLE'
-                    +-------+------------+
+                    +--------------------+
                     [37;41m| [39;49m[37;41mDont break[39;49m[37;41m         |[39;49m
                     [37;41m| here[39;49m               |
                     +-------+------------+
@@ -710,7 +777,7 @@ class TableTest extends TestCase
                     |               |               |         spans multiple rows rows          |
                     +---------------+---------------+-------------------------------------------+
                     |             test              |                                      tttt |
-                    +---------------+---------------+-------------------------------------------+
+                    +-------------------------------+-------------------------------------------+
 
                     TABLE,
             ],
@@ -778,7 +845,7 @@ class TableTest extends TestCase
                     |               |               |[31;42m         spans multiple rows rows          [39;49m|
                     +---------------+---------------+-------------------------------------------+
                     |             [37;41mtest[39;49m              |[31;42m                                      tttt [39;49m|
-                    +---------------+---------------+-------------------------------------------+
+                    +-------------------------------+-------------------------------------------+
 
                     TABLE,
                 true,
@@ -832,7 +899,7 @@ class TableTest extends TestCase
                     [39;49m| 978-0521567817 | De Monarchia  |[39;49m[32m Dante Alighieri     [39m[39;49m|[39;49m
                     | 978-0804169127 | Divine Comedy |[32m spans multiple rows [39m|
                     |[37;41m test                           [39;49m| tttt                |
-                    +----------------+---------------+---------------------+
+                    +--------------------------------+---------------------+
 
                     TABLE,
                 true,
@@ -974,15 +1041,15 @@ class TableTest extends TestCase
 
         $expected =
 <<<TABLE
-    +----+---+
+    +--------+
     | foo    |
-    +----+---+
-    +----+---+
+    +--------+
+    +--------+
     | foo    |
-    +----+---+
-    +----+---+
+    +--------+
+    +--------+
     | foo    |
-    +----+---+
+    +--------+
 
     TABLE;
 
@@ -1090,6 +1157,89 @@ class TableTest extends TestCase
                 | 99921-58-10-7   | Divine Comedy        | Dante Alighieri |       9.95 |
                 | 9971-5-0210-0   | A Tale of Two Cities | Charles Dickens |     139.25 |
                 +-----------------+----------------------+-----------------+------------+
+
+                TABLE;
+
+        $this->assertEquals($expected, $this->getOutputContent($output));
+    }
+
+    public function testColumnWidthIsKeptWhenARowSpansColumns()
+    {
+        $table = new Table($output = $this->getOutputStream());
+        $table
+            ->setHeaders(['ISBN', 'Author'])
+            ->setRows([
+                ['9971-5-0210-0', 'Dante Alighieri'],
+                [new TableCell('span', ['colspan' => 2])],
+            ])
+            ->setColumnWidth(0, 20);
+
+        $table->render();
+
+        $expected =
+            <<<TABLE
+                +----------------------+-----------------+
+                | ISBN                 | Author          |
+                +----------------------+-----------------+
+                | 9971-5-0210-0        | Dante Alighieri |
+                | span                                   |
+                +----------------------------------------+
+
+                TABLE;
+
+        $this->assertEquals($expected, $this->getOutputContent($output));
+    }
+
+    public function testColumnMinWidthDoesNotInflateSiblingColumns()
+    {
+        $table = new Table($output = $this->getOutputStream());
+        $table
+            ->setHeaders(['A', 'B'])
+            ->setRows([
+                ['x', 'y'],
+                [new TableCell('short span', ['colspan' => 2])],
+            ])
+            ->setColumnWidth(0, 20);
+
+        $table->render();
+
+        $expected =
+            <<<TABLE
+                +----------------------+-------+
+                | A                    | B     |
+                +----------------------+-------+
+                | x                    | y     |
+                | short span                   |
+                +------------------------------+
+
+                TABLE;
+
+        $this->assertEquals($expected, $this->getOutputContent($output));
+    }
+
+    public function testColumnWidthComputedForASpanningRowIsNotReusedByTheNextOne()
+    {
+        $table = new Table($output = $this->getOutputStream());
+        $table
+            ->setHeaders(['H0', 'H1'])
+            ->setRows([
+                ['value0', 'value1'],
+                [new TableCell('zzzzz', ['colspan' => 2])],
+                [new TableCell('qq', ['colspan' => 2])],
+            ])
+            ->setColumnMaxWidth(1, 6);
+
+        $table->render();
+
+        $expected =
+            <<<TABLE
+                +--------+--------+
+                | H0     | H1     |
+                +--------+--------+
+                | value0 | value1 |
+                | zzzzz           |
+                | qq              |
+                +-----------------+
 
                 TABLE;
 
@@ -1474,9 +1624,9 @@ class TableTest extends TestCase
                 │ ISBN          │ Title         │ Author          │
                 ├───────────────┼───────────────┼─────────────────┤
                 │ 99921-58-10-7 │ Divine Comedy │ Dante Alighieri │
-                ├───────────────┼───────────────┼─────────────────┤
+                ├───────────────┴───────────────┴─────────────────┤
                 │ This value spans 3 columns.                     │
-                └───────────────┴───────────────┴─────────────────┘
+                └─────────────────────────────────────────────────┘
 
                 TABLE;
 
@@ -1573,13 +1723,13 @@ class TableTest extends TestCase
 
         $expected =
             <<<TABLE
-                +-----------------+-----------------+-----------------+
+                +-----------------------------------------------------+
                 | Lorem ipsum dolor sit amet, consectetur adipiscing  |
                 | elit, sed do eiusmod tempor                         |
-                +-----------------+-----------------+-----------------+
+                +-----------------------------------------------------+
                 | Lorem ipsum dolor sit amet, consectetur adipiscing  |
                 | elit, sed do eiusmod tempor                         |
-                +-----------------+-----------------+-----------------+
+                +-----------------------------------+-----------------+
                 | Lorem ipsum dolor sit amet, conse | hello world     |
                 | ctetur                            |                 |
                 +-----------------+-----------------+-----------------+

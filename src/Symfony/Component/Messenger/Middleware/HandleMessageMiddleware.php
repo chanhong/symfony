@@ -119,7 +119,7 @@ class HandleMessageMiddleware implements MiddlewareInterface
             $this->logger?->info('No handler for message {class}', $context);
         }
 
-        if (\count($exceptions)) {
+        if ($exceptions) {
             throw new HandlerFailedException($envelope, $exceptions);
         }
 
@@ -137,6 +137,9 @@ class HandleMessageMiddleware implements MiddlewareInterface
         return false;
     }
 
+    /**
+     * @param-immediately-invoked-callable $handler
+     */
     private function callHandler(\Closure $handler, object $message, ?Acknowledger $ack, ?HandlerArgumentsStamp $handlerArgumentsStamp): mixed
     {
         $arguments = [$message];

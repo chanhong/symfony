@@ -18,8 +18,8 @@ use Psr\EventDispatcher\EventDispatcherInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Bridge\PhpUnit\ClockMock;
 use Symfony\Component\Clock\MockClock;
+use Symfony\Component\DependencyInjection\ServicesResetter;
 use Symfony\Component\EventDispatcher\EventDispatcher;
-use Symfony\Component\HttpKernel\DependencyInjection\ServicesResetter;
 use Symfony\Component\Messenger\Envelope;
 use Symfony\Component\Messenger\Event\WorkerMessageFailedEvent;
 use Symfony\Component\Messenger\Event\WorkerMessageHandledEvent;
@@ -41,6 +41,8 @@ use Symfony\Component\Messenger\Handler\HandlersLocator;
 use Symfony\Component\Messenger\MessageBus;
 use Symfony\Component\Messenger\MessageBusInterface;
 use Symfony\Component\Messenger\Middleware\HandleMessageMiddleware;
+use Symfony\Component\Messenger\Middleware\MiddlewareInterface;
+use Symfony\Component\Messenger\Middleware\StackInterface;
 use Symfony\Component\Messenger\Stamp\ConsumedByWorkerStamp;
 use Symfony\Component\Messenger\Stamp\FlushBatchHandlersStamp;
 use Symfony\Component\Messenger\Stamp\NoAutoAckStamp;
@@ -51,6 +53,7 @@ use Symfony\Component\Messenger\Tests\Fixtures\DummyMessage;
 use Symfony\Component\Messenger\Tests\Fixtures\DummyMessageInterface;
 use Symfony\Component\Messenger\Tests\Fixtures\DummyReceiver;
 use Symfony\Component\Messenger\Tests\Fixtures\ResettableDummyReceiver;
+use Symfony\Component\Messenger\TraceableMessageBus;
 use Symfony\Component\Messenger\Transport\Receiver\KeepaliveReceiverInterface;
 use Symfony\Component\Messenger\Transport\Receiver\QueueReceiverInterface;
 use Symfony\Component\Messenger\Transport\Receiver\ReceiverInterface;
@@ -323,6 +326,72 @@ class WorkerTest extends TestCase
         $this->assertEquals(new \DateTimeImmutable('2023-03-19 14:00:03+00:00'), $clock->now());
     }
 
+    public function testWorkerDoesNotSleepWhenStoppedDuringIdleRunningEvent()
+    {
+        $clock = new MockClock('2023-03-19 14:00:00+00:00');
+        $receiver = new DummyReceiver([[]]);
+
+        $dispatcher = new EventDispatcher();
+        $dispatcher->addListener(WorkerRunningEvent::class, static function (WorkerRunningEvent $event) {
+            if ($event->isWorkerIdle()) {
+                $event->getWorker()->stop();
+            }
+        });
+
+        $worker = new Worker([$receiver], new MessageBus(), $dispatcher, clock: $clock);
+        $worker->run(['sleep' => 1000000]);
+
+        $this->assertEquals(new \DateTimeImmutable('2023-03-19 14:00:00+00:00'), $clock->now());
+    }
+
+    public function testWorkerCapsIdleSleepToRemainingTimeLimitAfterMessageConsumption()
+    {
+        $clock = new MockClock('2023-03-19 14:00:00+00:00');
+        $receiver = new DummyReceiver([
+            [new Envelope(new DummyMessage('API'))],
+            [],
+        ]);
+
+        $dispatcher = new EventDispatcher();
+        $dispatcher->addListener(WorkerRunningEvent::class, static function (WorkerRunningEvent $event) use ($clock) {
+            if (!$event->isWorkerIdle()) {
+                $clock->sleep(50);
+            }
+        });
+
+        $worker = new Worker([$receiver], new MessageBus(), $dispatcher, clock: $clock);
+        $worker->run(['sleep' => 20000000, 'time_limit' => 60]);
+
+        $this->assertEquals(new \DateTimeImmutable('2023-03-19 14:01:00+00:00'), $clock->now());
+    }
+
+    public function testWorkerLogsWhenStoppedDueToTimeLimit()
+    {
+        $clock = new MockClock('2023-03-19 14:00:00+00:00');
+        $receiver = new DummyReceiver([[]]);
+
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->atLeastOnce())->method('info')
+            ->willReturnCallback(function (string $message, array $context = []) use (&$timeLimitLogged) {
+                if ('Worker stopped due to time limit of {timeLimit}s exceeded' === $message) {
+                    $this->assertSame(['timeLimit' => 60], $context);
+                    $timeLimitLogged = true;
+                }
+            });
+
+        $dispatcher = new EventDispatcher();
+        $dispatcher->addListener(WorkerRunningEvent::class, static function (WorkerRunningEvent $event) use ($clock) {
+            if ($event->isWorkerIdle()) {
+                $clock->sleep(70);
+            }
+        });
+
+        $worker = new Worker([$receiver], new MessageBus(), $dispatcher, $logger, clock: $clock);
+        $worker->run(['sleep' => 1000000, 'time_limit' => 60]);
+
+        $this->assertTrue($timeLimitLogged ?? false);
+    }
+
     public function testWorkerWithMultipleReceivers()
     {
         // envelopes, in their expected delivery order
@@ -536,6 +605,85 @@ class WorkerTest extends TestCase
         $worker->run();
 
         $this->assertSame($expectedMessages, $handler->processedMessages);
+    }
+
+    public function testCompletedBatchIsNotRedispatchedWhileWorkerIsIdle()
+    {
+        $expectedMessages = [];
+        $receivedEnvelopes = [];
+        for ($i = 1; $i <= 10; ++$i) {
+            $message = new DummyMessage('message'.$i);
+            $expectedMessages[] = $message;
+            $receivedEnvelopes[] = [new Envelope($message)];
+        }
+
+        $receiver = new DummyReceiver($receivedEnvelopes);
+        $handler = new DummyBatchHandler(batchSize: 10);
+        $clock = new MockClock();
+        $bus = new TraceableMessageBus(new MessageBus([
+            new HandleMessageMiddleware(new HandlersLocator([
+                DummyMessage::class => [new HandlerDescriptor($handler)],
+            ]), clock: $clock),
+        ]));
+
+        $worker = new Worker(['transport' => $receiver], $bus, clock: $clock);
+        $worker->run(['time_limit' => 30]);
+
+        $this->assertSame($expectedMessages, $handler->processedMessages);
+        $this->assertSame(10, $receiver->getAcknowledgeCount());
+        $this->assertCount(10, $bus->getDispatchedMessages());
+    }
+
+    public function testFlushFailureDoesNotRejectAlreadyAckedBatchMessage()
+    {
+        $expectedMessages = [
+            new DummyMessage('Hey'),
+        ];
+
+        $receiver = new DummyReceiver([
+            [new Envelope($expectedMessages[0])],
+            [],
+            [],
+        ]);
+
+        $handler = new DummyBatchHandler();
+
+        $clock = new MockClock();
+        $throwAfterFlush = new class implements MiddlewareInterface {
+            public function handle(Envelope $envelope, StackInterface $stack): Envelope
+            {
+                $envelope = $stack->next()->handle($envelope, $stack);
+
+                if ($envelope->last(FlushBatchHandlersStamp::class)) {
+                    throw new \RuntimeException('Flush dispatch failed.');
+                }
+
+                return $envelope;
+            }
+        };
+        $middleware = new HandleMessageMiddleware(new HandlersLocator([
+            DummyMessage::class => [new HandlerDescriptor($handler)],
+        ]), clock: $clock);
+
+        $bus = new MessageBus([$throwAfterFlush, $middleware]);
+        $clock = new MockClock();
+
+        $dispatcher = new EventDispatcher();
+        $dispatcher->addListener(WorkerRunningEvent::class, static function (WorkerRunningEvent $event) use ($clock) {
+            static $i = 0;
+            if (1 === ++$i) {
+                $clock->sleep(30);
+            } else {
+                $event->getWorker()->stop();
+            }
+        });
+
+        $worker = new Worker([$receiver], $bus, $dispatcher, clock: $clock);
+        $worker->run();
+
+        $this->assertSame($expectedMessages, $handler->processedMessages);
+        $this->assertSame(1, $receiver->getAcknowledgeCount());
+        $this->assertSame(0, $receiver->getRejectCount());
     }
 
     public function testFlushBatchOnIdle()

@@ -61,13 +61,13 @@ class HttpFoundationRequestHandler implements RequestHandlerInterface
             } else {
                 $queryData = $request->query->all()[$name] ?? $missingData;
 
-                $data = $this->missingDataHandler->handle($form, $queryData);
-
-                if ($missingData === $data) {
+                if ($missingData === $queryData) {
                     // Don't submit GET requests if the form's name does not exist
                     // in the request
                     return;
                 }
+
+                $data = $this->missingDataHandler->handle($form, $queryData);
             }
         } else {
             // Mark the form with an error if the uploaded size was too large
@@ -77,11 +77,10 @@ class HttpFoundationRequestHandler implements RequestHandlerInterface
                 // Submit the form, but don't clear the default values
                 $form->submit(null, false);
 
-                $form->addError(new FormError(
-                    $form->getConfig()->getOption('upload_max_size_message')(),
-                    null,
-                    ['{{ max }}' => $this->serverParams->getNormalizedIniPostMaxSize()]
-                ));
+                $messageTemplate = $form->getConfig()->getOption('upload_max_size_message')();
+                $messageParameters = ['{{ max }}' => $this->serverParams->getNormalizedIniPostMaxSize()];
+
+                $form->addError(new FormError(strtr($messageTemplate, $messageParameters), $messageTemplate, $messageParameters));
 
                 return;
             }
@@ -98,13 +97,13 @@ class HttpFoundationRequestHandler implements RequestHandlerInterface
                 $files = null;
             }
 
-            if ('PATCH' !== $method) {
-                $params = $this->missingDataHandler->handle($form, $params);
-            }
-
             if ($missingData === $params) {
                 // Don't submit the form if it is not present in the request
                 return;
+            }
+
+            if ('PATCH' !== $method) {
+                $params = $this->missingDataHandler->handle($form, $params);
             }
 
             if (\is_array($params) && \is_array($files)) {
@@ -115,7 +114,7 @@ class HttpFoundationRequestHandler implements RequestHandlerInterface
         }
 
         // Don't auto-submit the form unless at least one field is present.
-        if ('' === $name && \count(array_intersect_key($data, $form->all())) <= 0) {
+        if ('' === $name && !array_intersect_key($data, $form->all())) {
             return;
         }
 

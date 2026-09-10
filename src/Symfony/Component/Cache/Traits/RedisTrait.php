@@ -220,6 +220,12 @@ trait RedisTrait
             $params['auth'] = $auth ?? $params['auth'];
         }
 
+        foreach ([$params['auth'], $sentinelAuth] as $v) {
+            if (\is_array($v) && (!array_is_list($v) || 2 !== \count($v))) {
+                throw new InvalidArgumentException('Invalid Redis DSN: the "auth" parameter must be a string, or a list of exactly two elements for ACL, "[username, password]".');
+            }
+        }
+
         foreach (['lazy', 'persistent', 'cluster'] as $option) {
             if (!\is_bool($params[$option] ?? false)) {
                 $params[$option] = filter_var($params[$option], \FILTER_VALIDATE_BOOLEAN);
@@ -370,8 +376,8 @@ trait RedisTrait
                 throw new InvalidArgumentException('Redis connection failed: '.$e->getMessage());
             }
 
-            if (0 < $params['tcp_keepalive'] && (!$isRedisExt || \defined('Redis::OPT_TCP_KEEPALIVE'))) {
-                $redis->setOption($isRedisExt ? \Redis::OPT_TCP_KEEPALIVE : Relay::OPT_TCP_KEEPALIVE, $params['tcp_keepalive']);
+            if (0 < $params['tcp_keepalive']) {
+                $redis->setOption(\Redis::OPT_TCP_KEEPALIVE, $params['tcp_keepalive']);
             }
         } elseif (is_a($class, RelayCluster::class, true)) {
             $initializer = static function () use ($class, $params, $hosts) {
@@ -389,10 +395,8 @@ trait RedisTrait
 
                     foreach ($context as $name => $value) {
                         match ($name) {
-                            'use-cache', 'client-tracking', 'throw-on-error', 'client-invalidations', 'reply-literal', 'persistent',
-                                => $context[$name] = filter_var($value, \FILTER_VALIDATE_BOOLEAN),
-                            'max-retries', 'serializer', 'compression', 'compression-level',
-                                => $context[$name] = filter_var($value, \FILTER_VALIDATE_INT),
+                            'use-cache', 'client-tracking', 'throw-on-error', 'client-invalidations', 'reply-literal', 'persistent', => $context[$name] = filter_var($value, \FILTER_VALIDATE_BOOLEAN),
+                            'max-retries', 'serializer', 'compression', 'compression-level', => $context[$name] = filter_var($value, \FILTER_VALIDATE_INT),
                             default => null,
                         };
                     }
@@ -423,7 +427,7 @@ trait RedisTrait
 
             $redis = $params['lazy'] ? RelayClusterProxy::createLazyProxy($initializer) : $initializer();
         } elseif (is_a($class, \RedisCluster::class, true)) {
-            $initializer = static function () use ($isRedisExt, $class, $params, $hosts) {
+            $initializer = static function () use ($class, $params, $hosts) {
                 foreach ($hosts as $i => $host) {
                     $hosts[$i] = match ($host['scheme']) {
                         'tcp' => $host['host'].':'.$host['port'],
@@ -438,8 +442,8 @@ trait RedisTrait
                     throw new InvalidArgumentException('Redis connection failed: '.$e->getMessage());
                 }
 
-                if (0 < $params['tcp_keepalive'] && (!$isRedisExt || \defined('Redis::OPT_TCP_KEEPALIVE'))) {
-                    $redis->setOption($isRedisExt ? \Redis::OPT_TCP_KEEPALIVE : Relay::OPT_TCP_KEEPALIVE, $params['tcp_keepalive']);
+                if (0 < $params['tcp_keepalive']) {
+                    $redis->setOption(\Redis::OPT_TCP_KEEPALIVE, $params['tcp_keepalive']);
                 }
                 $redis->setOption(\RedisCluster::OPT_SLAVE_FAILOVER, match ($params['failover']) {
                     'error' => \RedisCluster::FAILOVER_ERROR,
@@ -574,7 +578,7 @@ trait RedisTrait
 
         if ($this->redis instanceof RelayCluster) {
             $prefix = Relay::SCAN_PREFIX & $this->redis->getOption(Relay::OPT_SCAN) ? '' : $this->redis->getOption(Relay::OPT_PREFIX);
-            $prefixLen = \strlen($prefix);
+            $prefixLen = \strlen($prefix ?? '');
             $pattern = $prefix.$namespace.'*';
             foreach ($this->redis->_masters() as $ipAndPort) {
                 $address = implode(':', $ipAndPort);
@@ -722,6 +726,9 @@ trait RedisTrait
         return $failed;
     }
 
+    /**
+     * @param-immediately-invoked-callable $generator
+     */
     private function pipeline(\Closure $generator, ?object $redis = null): \Generator
     {
         $ids = [];
@@ -815,8 +822,7 @@ trait RedisTrait
     {
         foreach ($options as $name => $value) {
             match ($name) {
-                'allow_self_signed', 'capture_peer_cert', 'capture_peer_cert_chain', 'disable_compression', 'SNI_enabled', 'verify_peer', 'verify_peer_name',
-                    => $options[$name] = filter_var($value, \FILTER_VALIDATE_BOOLEAN),
+                'allow_self_signed', 'capture_peer_cert', 'capture_peer_cert_chain', 'disable_compression', 'SNI_enabled', 'verify_peer', 'verify_peer_name', => $options[$name] = filter_var($value, \FILTER_VALIDATE_BOOLEAN),
                 default => null,
             };
         }

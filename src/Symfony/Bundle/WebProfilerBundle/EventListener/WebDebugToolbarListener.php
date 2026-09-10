@@ -14,6 +14,7 @@ namespace Symfony\Bundle\WebProfilerBundle\EventListener;
 use Symfony\Bundle\FullStack;
 use Symfony\Bundle\WebProfilerBundle\Csp\ContentSecurityPolicyHandler;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\EventStreamResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -91,11 +92,14 @@ class WebDebugToolbarListener implements EventSubscriberInterface
 
         $nonces = [];
         if ($this->cspHandler) {
-            if ($this->dumpDataCollector?->getDumpsCount() > 0) {
-                $this->cspHandler->disableCsp();
-            }
-
             $nonces = $this->cspHandler->updateResponseHeaders($request, $response);
+
+            if ($this->dumpDataCollector?->getDumpsCount() > 0) {
+                $this->dumpDataCollector->setNonce(
+                    $nonces['csp_script_nonce'] ?? null,
+                    $nonces['csp_style_nonce'] ?? null,
+                );
+            }
         }
 
         // do not capture redirects or modify XML HTTP Requests
@@ -150,6 +154,7 @@ class WebDebugToolbarListener implements EventSubscriberInterface
         if (self::DISABLED === $this->mode
             || !$response->headers->has('X-Debug-Token')
             || $response->isRedirection()
+            || $response instanceof BinaryFileResponse
             || ($response->headers->has('Content-Type') && !str_contains($response->headers->get('Content-Type') ?? '', 'html'))
             || 'html' !== $request->getRequestFormat()
             || false !== stripos($response->headers->get('Content-Disposition', ''), 'attachment;')
@@ -165,10 +170,10 @@ class WebDebugToolbarListener implements EventSubscriberInterface
      */
     protected function injectToolbar(Response $response, Request $request, array $nonces): void
     {
-        $responseRef = \WeakReference::create($response);
-        $injectToolbar = function (string $buffer) use ($request, $responseRef, $nonces): string {
+        $debugToken = $response->headers->get('X-Debug-Token');
+        $injectToolbar = function (string $buffer) use ($request, $debugToken, $nonces): string {
             if (false !== $pos = strripos($buffer, '</body>')) {
-                $toolbar = "\n".str_replace("\n", '', $this->getToolbarHTML($request, $responseRef->get()->headers->get('X-Debug-Token'), $nonces))."\n";
+                $toolbar = "\n".str_replace("\n", '', $this->getToolbarHTML($request, $debugToken, $nonces))."\n";
                 $buffer = substr($buffer, 0, $pos).$toolbar.substr($buffer, $pos);
             }
 
@@ -210,7 +215,8 @@ class WebDebugToolbarListener implements EventSubscriberInterface
     public static function getSubscribedEvents(): array
     {
         return [
-            KernelEvents::RESPONSE => ['onKernelResponse', -128],
+            // Run after ProfilerListener::onKernelResponse since we need the X-Debug-Token header
+            KernelEvents::RESPONSE => ['onKernelResponse', -2048],
         ];
     }
 }

@@ -55,10 +55,42 @@ class ErrorDetailsStampTest extends TestCase
         $this->assertEquals($flattenException, $stamp->getFlattenException());
     }
 
+    public function testStripsTraceFromNestedExceptions()
+    {
+        $deepestException = new \Exception('I am the deepest');
+        $nestedException = new \Exception('I am nested', 0, $deepestException);
+        $exception = new \Exception('I am on top', 0, $nestedException);
+
+        $stamp = ErrorDetailsStamp::create($exception);
+        $flattenException = $stamp->getFlattenException();
+
+        $this->assertNotNull($flattenException);
+        $nested = $flattenException->getPrevious();
+        $this->assertNotNull($nested);
+        $deepest = $nested->getPrevious();
+        $this->assertNotNull($deepest);
+
+        $this->assertCount(1, $flattenException->getTrace());
+        $this->assertCount(1, $nested->getTrace());
+        $this->assertCount(1, $deepest->getTrace());
+        $this->assertNotSame('', $nested->getTraceAsString());
+        $this->assertNotSame('', $deepest->getTraceAsString());
+    }
+
     public function testDeserialization()
     {
         $exception = new \Exception('exception message');
         $stamp = ErrorDetailsStamp::create($exception);
+
+        // FlattenExceptionNormalizer drops trace args, mirror that on the expected stamp
+        $flattenException = $stamp->getFlattenException();
+        $trace = array_map(static function (array $frame): array {
+            unset($frame['args']);
+
+            return $frame;
+        }, $flattenException->getTrace());
+        (new \ReflectionProperty(FlattenException::class, 'trace'))->setValue($flattenException, $trace);
+
         $serializer = new Serializer(
             new SymfonySerializer([
                 new ArrayDenormalizer(),

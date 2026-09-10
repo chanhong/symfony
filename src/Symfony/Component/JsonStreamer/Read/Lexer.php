@@ -24,6 +24,7 @@ use Symfony\Component\JsonStreamer\Exception\RuntimeException;
 final class Lexer
 {
     private const MAX_CHUNK_LENGTH = 8192;
+    private const MAX_DEPTH = 512;
 
     private const WHITESPACE_CHARS = [' ' => true, "\r" => true, "\t" => true, "\n" => true];
     private const STRUCTURE_CHARS = [',' => true, ':' => true, '{' => true, '}' => true, '[' => true, ']' => true];
@@ -141,9 +142,13 @@ final class Lexer
 
         rewind($stream);
 
-        while (!feof($stream) && ($infiniteLength || $toReadLength > 0)) {
+        while (($infiniteLength && !feof($stream)) || $toReadLength > 0) {
             if (false === $chunk = stream_get_contents($stream, $infiniteLength ? $chunkLength : min($chunkLength, $toReadLength), $offset)) {
                 throw new RuntimeException('Failed to read JSON stream.');
+            }
+
+            if ('' === $chunk) {
+                break;
             }
 
             $toReadLength -= $l = \strlen($chunk);
@@ -165,7 +170,9 @@ final class Lexer
                 throw new InvalidStreamException(\sprintf('Unexpected "%s" token.', $token));
             }
 
-            ++$context['pointer'];
+            if (++$context['pointer'] >= self::MAX_DEPTH - 1) {
+                throw new InvalidStreamException(\sprintf('Maximum stack depth of %d exceeded.', self::MAX_DEPTH));
+            }
             $context['structures'][$context['pointer']] = 'dict';
             $context['keys'][$context['pointer']] = [];
             $context['expected_token'] = self::TOKEN_DICT_END | self::TOKEN_KEY;
@@ -195,8 +202,11 @@ final class Lexer
                 throw new InvalidStreamException(\sprintf('Unexpected "%s" token.', $token));
             }
 
+            if (++$context['pointer'] >= self::MAX_DEPTH - 1) {
+                throw new InvalidStreamException(\sprintf('Maximum stack depth of %d exceeded.', self::MAX_DEPTH));
+            }
             $context['expected_token'] = self::TOKEN_LIST_END | self::TOKEN_VALUE;
-            $context['structures'][++$context['pointer']] = 'list';
+            $context['structures'][$context['pointer']] = 'list';
 
             return;
         }

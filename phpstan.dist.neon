@@ -1,0 +1,28 @@
+includes:
+    - vendor/phpstan/phpstan-deprecation-rules/rules.neon
+    - .github/sa-tools/rules.neon
+
+parameters:
+    level: 5
+    reportUnmatchedIgnoredErrors: false
+    treatPhpDocTypesAsCertain: false
+    tmpDir: .github/sa-tools/phpstan-cache
+    paths:
+        - src
+    excludePaths:
+        - src/Symfony/*/Tests/*
+        - src/Symfony/*/*/Tests/*
+        - src/Symfony/*/*/*/Tests/*
+        - src/Symfony/*/*/*/*/Tests/*
+        - src/Symfony/Component/Intl/Resources/data/*
+        - src/Symfony/Component/Emoji/Resources/data/*
+    ignoreErrors:
+        # Added in PHP 8.4
+        - '#^Class BcMath\\Number not found\.$#'
+        # DeferredBatchMessage::$acked aliases a bool that batch handlers flip during dispatch()
+        -
+            message: '#^If condition is always false\.$#'
+            path: src/Symfony/Component/Messenger/Worker.php
+        -
+            message: '#^Negated boolean expression is always true\.$#'
+            path: src/Symfony/Component/Messenger/Worker.php

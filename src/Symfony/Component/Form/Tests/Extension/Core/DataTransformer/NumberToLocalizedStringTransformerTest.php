@@ -223,6 +223,19 @@ class NumberToLocalizedStringTransformerTest extends TestCase
         $this->assertEquals('1234,547', $transformer->transform(1234.547));
     }
 
+    public function testTransformAppliesRoundingModeIfNoScale()
+    {
+        // Since we test against "de_AT", we need the full implementation
+        IntlTestHelper::requireFullIntl($this);
+
+        \Locale::setDefault('de_AT');
+
+        $this->assertSame('1,063', (new NumberToLocalizedStringTransformer())->transform(1.0625));
+        $this->assertSame('1,062', (new NumberToLocalizedStringTransformer(null, null, \NumberFormatter::ROUND_HALFEVEN))->transform(1.0625));
+        $this->assertSame('1,062', (new NumberToLocalizedStringTransformer(null, null, \NumberFormatter::ROUND_DOWN))->transform(1.0625));
+        $this->assertSame('1,063', (new NumberToLocalizedStringTransformer(null, null, \NumberFormatter::ROUND_UP))->transform(1.0625));
+    }
+
     #[DataProvider('provideTransformations')]
     public function testReverseTransform($to, $from, $locale)
     {
@@ -648,7 +661,7 @@ class NumberToLocalizedStringTransformerTest extends TestCase
     }
 
     #[RequiresPhpExtension('intl')]
-    #[RequiresPhp('< 8.5')]
+    #[RequiresPhp('< 8.5.0')]
     public function testReverseTransformWrapsIntlErrorsWithErrorLevel()
     {
         $errorLevel = ini_set('intl.error_level', \E_WARNING);
@@ -677,7 +690,7 @@ class NumberToLocalizedStringTransformerTest extends TestCase
     }
 
     #[RequiresPhpExtension('intl')]
-    #[RequiresPhp('< 8.5')]
+    #[RequiresPhp('< 8.5.0')]
     public function testReverseTransformWrapsIntlErrorsWithExceptionsAndErrorLevel()
     {
         $initialUseExceptions = ini_set('intl.use_exceptions', 1);
